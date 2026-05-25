@@ -1,0 +1,29 @@
+# Entorno virtual
+venv/
+.venv/
+env/
+
+# Build outputs
+dist/
+build/
+build_output/
+*.spec.bak
+__pycache__/
+*.pyc
+*.pyo
+
+# Datos de usuario (NO versionar)
+.env
+logs/
+*.log
+
+# Archivos de estado local
+.onboarding_completed
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
