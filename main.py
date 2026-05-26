@@ -1,6 +1,6 @@
 """
-SISTEMA DE MONITOREO DE POSTURA - v4.0
-Punto de entrada principal. Compatible con ejecución directa y .deb instalado.
+SISTEMA DE MONITOREO DE POSTURA - v4.1
+Punto de entrada principal. Soporte para cámara simple y dual.
 """
 
 import argparse
@@ -12,12 +12,10 @@ from pathlib import Path
 
 import cv2
 
-# Asegurar que el paquete raíz esté en el path (necesario cuando se ejecuta como script)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# settings.py ya carga credenciales integradas y el config.env del usuario
 from config import camara, umbrales, telegram, visualizacion, modo
-from core.captura_video import CapturaVideo
+from core.captura_video import CapturaDualVideo, detectar_camaras_disponibles
 from core.deteccion_postura import DetectorPostura
 from core.analisis_postura import AnalizadorPostura, EstadoPostura
 from core.monitor_segundo_plano import MonitorSegundoPlano
@@ -38,19 +36,23 @@ def verificar_onboarding() -> bool:
         return True
 
 
-def ejecutar_modo_debug() -> None:
+# ── Modo DEBUG ────────────────────────────────────────────────────────────────
+
+def ejecutar_modo_debug(indice_secundario=None) -> None:
     logger.info("=" * 60)
-    logger.info("  MODO DEBUG - v4.0 (detección mejorada)")
+    logger.info("  MODO DEBUG v4.1 — cámara dual habilitada")
     logger.info("=" * 60)
     logger.info("Controles: [Q/ESC] Salir | [S] Esqueleto | [A] Ángulos | [T] Test Telegram")
 
-    captura = CapturaVideo(camara)
+    captura = CapturaDualVideo(camara, indice_secundario=indice_secundario)
     if not captura.iniciar():
-        logger.error("No se pudo iniciar la cámara.")
+        logger.error("No se pudo iniciar ninguna cámara.")
         sys.exit(1)
 
-    detector     = DetectorPostura()
-    analizador   = AnalizadorPostura(umbrales)
+    detector_p   = DetectorPostura()
+    detector_s   = DetectorPostura()
+    analizador_p = AnalizadorPostura(umbrales)
+    analizador_s = AnalizadorPostura(umbrales)
     base_datos   = BaseDatosPostura()
     notificaciones = GestorNotificacionesTelegram(telegram)
     hud          = HUDPostura(visualizacion, umbrales)
@@ -60,84 +62,115 @@ def ejecutar_modo_debug() -> None:
     ultimo_guardado_bd = time.time()
     INTERVALO_BD       = 5
 
-    logger.info(f"Sesión iniciada. ID: {sesion_id}")
     mostrar_esqueleto    = True
     mostrar_angulos_flag = True
 
+    modo_texto = "DUAL" if captura.tiene_secundaria else "SIMPLE"
+    logger.info(f"Modo de cámara: {modo_texto}")
+
     try:
         while True:
-            exito, frame = captura.leer_frame()
-            if not exito:
+            frame_p, frame_s = captura.leer_frames()
+
+            if frame_p is None:
                 time.sleep(0.05)
                 continue
 
-            alto, ancho = frame.shape[:2]
-            resultado_deteccion = detector.detectar(frame)
+            alto, ancho = frame_p.shape[:2]
 
-            if mostrar_esqueleto and resultado_deteccion.pose_detectada:
-                detector.dibujar_esqueleto(frame, resultado_deteccion.landmarks_raw)
+            # ── Análisis principal ────────────────────────────────────────────
+            det_p = detector_p.detectar(frame_p)
+            if mostrar_esqueleto and det_p.pose_detectada:
+                detector_p.dibujar_esqueleto(frame_p, det_p.landmarks_raw)
+            res_p = analizador_p.analizar(det_p.landmarks, ancho, alto)
 
-            resultado_analisis = analizador.analizar(resultado_deteccion.landmarks, ancho, alto)
+            # ── Análisis secundario ───────────────────────────────────────────
+            res_s = None
+            if captura.tiene_secundaria and frame_s is not None:
+                alto_s, ancho_s = frame_s.shape[:2]
+                det_s = detector_s.detectar(frame_s)
+                if mostrar_esqueleto and det_s.pose_detectada:
+                    detector_s.dibujar_esqueleto(frame_s, det_s.landmarks_raw)
+                res_s = analizador_s.analizar(det_s.landmarks, ancho_s, alto_s)
 
-            if resultado_analisis.estado != EstadoPostura.SIN_DETECCION:
-                ang = resultado_analisis.angulos
-                logger.debug(
-                    f"Estado: {resultado_analisis.estado.value:12s} | "
-                    f"Cuello: {ang.angulo_cuello or ang.neck_inclination or 0:5.1f}° | "
-                    f"Espalda: {ang.angulo_espalda or 0:5.1f}° | "
-                    f"Tiempo mala: {resultado_analisis.tiempo_mala_postura_segundos:.1f}s"
+            # ── Fusionar ──────────────────────────────────────────────────────
+            from core.monitor_segundo_plano import MonitorSegundoPlano
+            _mon = MonitorSegundoPlano.__new__(MonitorSegundoPlano)
+            resultado = _mon._fusionar(res_p, res_s) if res_s else res_p
+
+            # ── HUD en ventana principal ──────────────────────────────────────
+            frame_p = hud.renderizar(frame_p, resultado, mostrar_angulos=mostrar_angulos_flag)
+
+            # ── Etiqueta modo cámara ──────────────────────────────────────────
+            cv2.putText(
+                frame_p,
+                f"CAM: {modo_texto} | Principal={camara.indice_camara}"
+                + (f" Sec={captura.indice_secundario}" if captura.tiene_secundaria else ""),
+                (10, frame_p.shape[0] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1,
+            )
+
+            cv2.imshow("Monitor de Postura v4.1 — Principal [Q=Salir]", frame_p)
+
+            # ── Ventana secundaria ────────────────────────────────────────────
+            if captura.tiene_secundaria and frame_s is not None:
+                # HUD simplificado para la secundaria
+                estado_color = {
+                    EstadoPostura.CORRECTA:    (0, 200, 0),
+                    EstadoPostura.ADVERTENCIA: (0, 165, 255),
+                    EstadoPostura.INCORRECTA:  (0, 0, 220),
+                    EstadoPostura.SIN_DETECCION: (128, 128, 128),
+                }.get(res_s.estado if res_s else EstadoPostura.SIN_DETECCION, (128, 128, 128))
+
+                etiqueta = f"Sec ({res_s.orientacion if res_s else '-'}): " + \
+                           (res_s.mensaje_estado if res_s else "Sin detección")
+                cv2.putText(
+                    frame_s, etiqueta, (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, estado_color, 2,
                 )
+                cv2.imshow("Monitor de Postura v4.1 — Secundaria", frame_s)
 
-            frame = hud.renderizar(frame, resultado_analisis, mostrar_angulos=mostrar_angulos_flag)
-
+            # ── BD ────────────────────────────────────────────────────────────
             ahora = time.time()
             if ahora - ultimo_guardado_bd >= INTERVALO_BD:
                 base_datos.guardar_postura(
                     sesion_id=sesion_id,
-                    estado=resultado_analisis.estado.value,
-                    angulo_cuello=resultado_analisis.angulos.angulo_cuello,
-                    angulo_espalda=resultado_analisis.angulos.angulo_espalda,
-                    inclinacion_lateral=resultado_analisis.angulos.inclinacion_lateral,
+                    estado=resultado.estado.value,
+                    angulo_cuello=resultado.angulos.angulo_cuello,
+                    angulo_espalda=resultado.angulos.angulo_espalda,
+                    inclinacion_lateral=resultado.angulos.inclinacion_lateral,
                 )
                 ultimo_guardado_bd = ahora
 
-            if resultado_analisis.debe_alertar:
-                tipo_texto = (resultado_analisis.alertas_activas[0].value
-                              if resultado_analisis.alertas_activas else "Mala postura")
+            # ── Alertas ───────────────────────────────────────────────────────
+            if resultado.debe_alertar:
+                tipo = (resultado.alertas_activas[0].value
+                        if resultado.alertas_activas else "Mala postura")
                 alerta_id = base_datos.guardar_alerta(
                     sesion_id=sesion_id,
-                    tipo_alerta=tipo_texto,
-                    tiempo_mala_postura=resultado_analisis.tiempo_mala_postura_segundos,
+                    tipo_alerta=tipo,
+                    tiempo_mala_postura=resultado.tiempo_mala_postura_segundos,
                 )
                 enviado = notificaciones.enviar_alerta_postura(
-                    tipo_alerta=tipo_texto,
-                    tiempo_mala_postura=resultado_analisis.tiempo_mala_postura_segundos,
-                    angulo_cuello=resultado_analisis.angulos.angulo_cuello,
-                    angulo_espalda=resultado_analisis.angulos.angulo_espalda,
+                    tipo_alerta=tipo,
+                    tiempo_mala_postura=resultado.tiempo_mala_postura_segundos,
+                    angulo_cuello=resultado.angulos.angulo_cuello,
+                    angulo_espalda=resultado.angulos.angulo_espalda,
                 )
                 if enviado and alerta_id:
                     base_datos.marcar_alerta_telegram(alerta_id)
-                if umbrales.sonido_alerta:
-                    try:
-                        if sys.platform == "win32":
-                            import winsound; winsound.Beep(1000, 200)
-                        else:
-                            print("\a", end="", flush=True)
-                    except Exception:
-                        pass
 
-            if resultado_analisis.debe_alertar_sedentarismo:
+            if resultado.debe_alertar_sedentarismo:
                 alerta_id = base_datos.guardar_alerta(
                     sesion_id=sesion_id,
-                    tipo_alerta="Sedentarismo: 30 min sin movimiento",
-                    tiempo_mala_postura=resultado_analisis.tiempo_sin_cambio_segundos,
+                    tipo_alerta="Sedentarismo",
+                    tiempo_mala_postura=resultado.tiempo_sin_cambio_segundos,
                 )
-                notificaciones.enviar_alerta_sedentarismo(resultado_analisis.tiempo_sin_cambio_segundos)
+                notificaciones.enviar_alerta_sedentarismo(resultado.tiempo_sin_cambio_segundos)
                 if alerta_id:
                     base_datos.marcar_alerta_telegram(alerta_id)
 
-            cv2.imshow("Monitor de Postura v4 [Q=Salir]", frame)
-
+            # ── Teclas ────────────────────────────────────────────────────────
             tecla = cv2.waitKey(1) & 0xFF
             if tecla in (ord("q"), ord("Q"), 27):
                 break
@@ -146,7 +179,6 @@ def ejecutar_modo_debug() -> None:
             elif tecla in (ord("a"), ord("A")):
                 mostrar_angulos_flag = not mostrar_angulos_flag
             elif tecla in (ord("t"), ord("T")):
-                logger.info("Enviando mensaje de prueba a Telegram...")
                 notificaciones.enviar_prueba()
 
     finally:
@@ -155,20 +187,23 @@ def ejecutar_modo_debug() -> None:
         resumen = base_datos.obtener_resumen_sesion(sesion_id)
         notificaciones.enviar_resumen_sesion(resumen)
         captura.liberar()
-        detector.cerrar()
+        detector_p.cerrar()
+        detector_s.cerrar()
         cv2.destroyAllWindows()
         logger.info("Sistema finalizado.")
 
 
-def ejecutar_modo_produccion() -> None:
-    logger.info("MODO PRODUCCIÓN - v4")
+# ── Modo PRODUCCIÓN ───────────────────────────────────────────────────────────
+
+def ejecutar_modo_produccion(indice_secundario=None) -> None:
+    logger.info("MODO PRODUCCIÓN v4.1")
     monitor = MonitorSegundoPlano()
 
     def manejar_senial(sig, frame):
         monitor.detener()
         sys.exit(0)
 
-    signal.signal(signal.SIGINT, manejar_senial)
+    signal.signal(signal.SIGINT,  manejar_senial)
     signal.signal(signal.SIGTERM, manejar_senial)
 
     if not monitor.iniciar():
@@ -181,10 +216,22 @@ def ejecutar_modo_produccion() -> None:
         monitor.detener()
 
 
+# ── Argumentos ────────────────────────────────────────────────────────────────
+
 def parsear_argumentos():
-    parser = argparse.ArgumentParser(description="Monitor de Postura v4")
-    parser.add_argument("--modo", choices=["debug", "produccion"], default="produccion")
-    parser.add_argument("--camara", type=int, default=0)
+    # Mostrar cámaras disponibles al iniciar
+    disponibles = detectar_camaras_disponibles()
+
+    parser = argparse.ArgumentParser(
+        description="Monitor de Postura v4.1 — soporte cámara dual",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"Cámaras detectadas en este sistema: {disponibles}",
+    )
+    parser.add_argument("--modo",     choices=["debug", "produccion"], default="produccion")
+    parser.add_argument("--camara",   type=int, default=0,
+                        help="Índice de la cámara principal (default: 0)")
+    parser.add_argument("--camara2",  type=int, default=None,
+                        help="Índice de la cámara secundaria (auto-detecta si no se indica)")
     parser.add_argument("--skip-onboarding", action="store_true")
     return parser.parse_args()
 
@@ -200,7 +247,7 @@ if __name__ == "__main__":
 
     if args.modo == "produccion":
         modo.debug = False
-        ejecutar_modo_produccion()
+        ejecutar_modo_produccion(indice_secundario=args.camara2)
     else:
         modo.debug = True
-        ejecutar_modo_debug()
+        ejecutar_modo_debug(indice_secundario=args.camara2)
