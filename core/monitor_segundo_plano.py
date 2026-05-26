@@ -111,7 +111,7 @@ class MonitorSegundoPlano:
                 )
                 if enviado and alerta_id:
                     self._base_datos.marcar_alerta_telegram(alerta_id)
-                self._beep(1000, 200)
+        #        self._beep(1000, 200)  # eliminado en v4.2
 
             if resultado.debe_alertar_sedentarismo and self.sesion_id:
                 alerta_id = self._base_datos.guardar_alerta(
@@ -124,7 +124,7 @@ class MonitorSegundoPlano:
                 )
                 if alerta_id:
                     self._base_datos.marcar_alerta_telegram(alerta_id)
-                self._beep(1500, 500)
+        #        self._beep(1500, 500)  # eliminado en v4.2
 
         logger.info("Bucle de monitoreo finalizado.")
 

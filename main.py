@@ -251,3 +251,4 @@ if __name__ == "__main__":
     else:
         modo.debug = True
         ejecutar_modo_debug(indice_secundario=args.camara2)
+
