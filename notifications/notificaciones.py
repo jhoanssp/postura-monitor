@@ -223,3 +223,44 @@ class GestorNotificacionesTelegram:
 
         logger.error("No se pudo enviar la notificación después de todos los intentos.")
         return False
+
+
+# Parche i18n — se aplica si el módulo ya existe
+def _parche_i18n():
+    try:
+        from config.i18n import t, I18n
+        import notifications.notificaciones as _self
+
+        _orig_alerta = _self.GestorNotificacionesTelegram.enviar_alerta_postura.__wrapped__ \
+            if hasattr(_self.GestorNotificacionesTelegram.enviar_alerta_postura, '__wrapped__') \
+            else None
+
+        def enviar_alerta_postura(self, tipo_alerta, tiempo_mala_postura,
+                                   angulo_cuello=None, angulo_espalda=None):
+            if not self.configurado: return False
+            mins = int(tiempo_mala_postura // 60)
+            segs = int(tiempo_mala_postura % 60)
+            dur  = f"{mins} {t('notif_minutos')} {segs} {t('notif_segundos')}" \
+                   if mins > 0 else f"{segs} {t('notif_segundos')}"
+            msg  = f"{t('notif_alerta_titulo')}\n"
+            msg += f"▸ {t('notif_tipo')}: {tipo_alerta}\n"
+            msg += f"▸ {t('notif_duracion')}: {dur}\n"
+            if angulo_cuello:
+                msg += f"▸ {t('notif_angulo_cuello')}: {angulo_cuello:.1f}°\n"
+            if angulo_espalda:
+                msg += f"▸ {t('notif_angulo_espalda')}: {angulo_espalda:.1f}°\n"
+            return self._enviar(msg)
+
+        _self.GestorNotificacionesTelegram.enviar_alerta_postura = enviar_alerta_postura
+
+        def enviar_alerta_sedentarismo(self, tiempo_segundos):
+            if not self.configurado: return False
+            mins = int(tiempo_segundos // 60)
+            return self._enviar(t("notif_sedentarismo", t=mins))
+
+        _self.GestorNotificacionesTelegram.enviar_alerta_sedentarismo = enviar_alerta_sedentarismo
+
+    except Exception:
+        pass
+
+_parche_i18n()
