@@ -1,0 +1,21 @@
+#!/bin/bash
+set -e
+chmod +x /opt/postura-monitor/postura-monitor || true
+chmod +x /usr/local/bin/postura-monitor || true
+if command -v update-desktop-database &>/dev/null; then
+    update-desktop-database /usr/share/applications/ || true
+fi
+
+# Lanzar la app inmediatamente después de instalar (sin esperar reinicio)
+if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+    USER_DISPLAY=$(su - "$SUDO_USER" -c 'echo $DISPLAY' 2>/dev/null || echo ":0")
+    DBUS=$(su - "$SUDO_USER" -c 'echo $DBUS_SESSION_BUS_ADDRESS' 2>/dev/null || echo "")
+    su - "$SUDO_USER" -c "DISPLAY=${USER_DISPLAY} DBUS_SESSION_BUS_ADDRESS=${DBUS} \
+        nohup /usr/local/bin/postura-monitor > /dev/null 2>&1 &" || true
+fi
+
+echo ""
+echo "✅ Monitor de Postura instalado correctamente."
+echo "   Iniciando en segundo plano..."
+echo ""
+exit 0
