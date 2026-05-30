@@ -7,7 +7,7 @@
 set -euo pipefail
 
 APP_NAME="postura-monitor"
-APP_VERSION="4.0.0"
+APP_VERSION="4.4.1"
 ARCH="amd64"
 MAINTAINER="Tu Nombre <tu@email.com>"
 DESCRIPTION="Monitor de postura en tiempo real con IA, Telegram y Supabase"
