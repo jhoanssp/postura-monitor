@@ -56,7 +56,7 @@ a = Analysis(
         "utils.logger",
         "utils.visualizacion_hud",
     ],
-    hookspath=[],
+    hookspath=[str(Path(SPECPATH) / 'hooks')],
     runtime_hooks=[],
     excludes=["tkinter", "scipy", "pandas", "IPython"],
     cipher=block_cipher,
