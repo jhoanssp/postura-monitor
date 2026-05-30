@@ -225,23 +225,20 @@ class GestorNotificacionesTelegram:
         return False
 
 
-# Parche i18n — se aplica si el módulo ya existe
+
+# ── Parche i18n v4.4 ─────────────────────────────────────────────────────────
 def _parche_i18n():
     try:
         from config.i18n import t, I18n
-        import notifications.notificaciones as _self
-
-        _orig_alerta = _self.GestorNotificacionesTelegram.enviar_alerta_postura.__wrapped__ \
-            if hasattr(_self.GestorNotificacionesTelegram.enviar_alerta_postura, '__wrapped__') \
-            else None
+        import notifications.notificaciones as _m
+        import threading
 
         def enviar_alerta_postura(self, tipo_alerta, tiempo_mala_postura,
                                    angulo_cuello=None, angulo_espalda=None):
-            if not self.configurado: return False
+            if not self.habilitado: return False
             mins = int(tiempo_mala_postura // 60)
             segs = int(tiempo_mala_postura % 60)
-            dur  = f"{mins} {t('notif_minutos')} {segs} {t('notif_segundos')}" \
-                   if mins > 0 else f"{segs} {t('notif_segundos')}"
+            dur  = f"{mins}m {segs}s" if mins > 0 else f"{segs}s"
             msg  = f"{t('notif_alerta_titulo')}\n"
             msg += f"▸ {t('notif_tipo')}: {tipo_alerta}\n"
             msg += f"▸ {t('notif_duracion')}: {dur}\n"
@@ -249,17 +246,18 @@ def _parche_i18n():
                 msg += f"▸ {t('notif_angulo_cuello')}: {angulo_cuello:.1f}°\n"
             if angulo_espalda:
                 msg += f"▸ {t('notif_angulo_espalda')}: {angulo_espalda:.1f}°\n"
-            return self._enviar(msg)
-
-        _self.GestorNotificacionesTelegram.enviar_alerta_postura = enviar_alerta_postura
+            threading.Thread(target=self._enviar_mensaje, args=(msg,), daemon=True).start()
+            return True
 
         def enviar_alerta_sedentarismo(self, tiempo_segundos):
-            if not self.configurado: return False
+            if not self.habilitado: return False
             mins = int(tiempo_segundos // 60)
-            return self._enviar(t("notif_sedentarismo", t=mins))
+            msg = t("notif_sedentarismo", t=mins)
+            threading.Thread(target=self._enviar_mensaje, args=(msg,), daemon=True).start()
+            return True
 
-        _self.GestorNotificacionesTelegram.enviar_alerta_sedentarismo = enviar_alerta_sedentarismo
-
+        _m.GestorNotificacionesTelegram.enviar_alerta_postura = enviar_alerta_postura
+        _m.GestorNotificacionesTelegram.enviar_alerta_sedentarismo = enviar_alerta_sedentarismo
     except Exception:
         pass
 
