@@ -1,19 +1,10 @@
-# Monitor de Postura v4 — dependencias
-# Instalar con: pip install -r requirements.txt
-
-# Visión por computadora (headless = sin Qt embebido, evita conflicto con PySide6)
+# Monitor de Postura v4.4
 opencv-python-headless>=4.8.0
 mediapipe==0.10.14
-
-# Interfaz gráfica
 PySide6>=6.6.0
-
-# Matplotlib (requerido internamente por mediapipe)
 matplotlib>=3.7.0
-
-# Red y servicios
 requests>=2.31.0
 python-dotenv>=1.0.0
-
-# Backend de datos (Supabase)
 supabase>=2.5.0
+# Notificaciones desktop
+plyer>=2.1.0
