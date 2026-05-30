@@ -1,11 +1,4 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-PyInstaller spec — Monitor de Postura v4
-Funciona en Linux (para .deb) y Windows (para .exe)
-Uso:
-    pyinstaller packaging/postura_monitor.spec
-"""
-
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
@@ -24,51 +17,48 @@ a = Analysis(
     binaries=mediapipe_bins,
     datas=mediapipe_datas + onboarding_datas,
     hiddenimports=[
-        # Qt / PySide6
-        "PySide6.QtCore",
-        "PySide6.QtGui",
-        "PySide6.QtWidgets",
+        # Qt
+        "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
         # Mediapipe
-        "mediapipe",
-        "mediapipe.python",
-        "mediapipe.python.solutions",
+        "mediapipe", "mediapipe.python", "mediapipe.python.solutions",
         "mediapipe.python.solutions.pose",
         "mediapipe.python.solutions.drawing_utils",
-        # Matplotlib (requerido por mediapipe internamente)
-        "matplotlib",
-        "matplotlib.pyplot",
-        "matplotlib.backends.backend_agg",
-        # OpenCV headless
+        # Matplotlib
+        "matplotlib", "matplotlib.pyplot", "matplotlib.backends.backend_agg",
+        # OpenCV
         "cv2",
         # Red
-        "requests",
-        "urllib3",
+        "requests", "urllib3",
         # Supabase
-        "supabase",
-        "postgrest",
-        "httpx",
-        # Propios
+        "supabase", "postgrest", "httpx",
+        # Notificaciones
+        "plyer", "plyer.platforms.linux.notification",
+        "plyer.platforms.win.notification",
+        # ── Módulos propios — TODOS explícitos ────────────────────────────────
         "config.credentials",
         "config.settings",
-        "onboarding.estado",
-        "onboarding.wizard",
+        "config.i18n",
         "core.captura_video",
         "core.deteccion_postura",
         "core.analisis_postura",
+        "core.analizador_posturas",      # ← nuevo v4.4
+        "core.detector_ausencia",        # ← nuevo v4.4
+        "core.calibrador",               # ← nuevo v4.4
         "core.monitor_segundo_plano",
+        "core.bandeja",
         "database.base_datos",
         "database.supabase_client",
         "notifications.notificaciones",
+        "notifications.local",           # ← nuevo v4.4
+        "onboarding.estado",
+        "onboarding.wizard",
+        "onboarding.calibracion_widget", # ← nuevo v4.4
         "utils.logger",
         "utils.visualizacion_hud",
     ],
     hookspath=[],
-    hooksconfig={},
     runtime_hooks=[],
-    # NOTA: NO excluir matplotlib — mediapipe lo necesita internamente
     excludes=["tkinter", "scipy", "pandas", "IPython"],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
@@ -76,30 +66,15 @@ a = Analysis(
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
-    pyz,
-    a.scripts,
-    [],
+    pyz, a.scripts, [],
     exclude_binaries=True,
     name="postura-monitor",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    debug=False, strip=False, upx=True,
     console=False,
-    disable_windowed_traceback=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=None,
 )
 
 coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
+    exe, a.binaries, a.zipfiles, a.datas,
+    strip=False, upx=True, upx_exclude=[],
     name="postura-monitor",
 )
