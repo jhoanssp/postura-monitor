@@ -50,10 +50,19 @@ def _angulo_vectores(v1: np.ndarray, v2: np.ndarray) -> float:
 
 
 def _punto(lm: dict, idx: int) -> Optional[np.ndarray]:
+    """Extrae (x, y) de PuntoLandmark o lista/tupla."""
     p = lm.get(idx)
-    if p is None: return None
-    vis = p[3] if len(p) > 3 else 1.0
-    return np.array(p[:2]) if vis > 0.4 else None
+    if p is None:
+        return None
+    if hasattr(p, 'x'):
+        if getattr(p, 'visibilidad', 1.0) < 0.4:
+            return None
+        return np.array([p.x, p.y])
+    try:
+        vis = p[3] if len(p) > 3 else 1.0
+        return np.array(p[:2]) if vis > 0.4 else None
+    except Exception:
+        return None
 
 
 def _medio(a: Optional[np.ndarray], b: Optional[np.ndarray]) -> Optional[np.ndarray]:

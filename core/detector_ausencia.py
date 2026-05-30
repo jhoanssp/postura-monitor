@@ -1,7 +1,6 @@
 """
 Detector de ausencia del usuario — v4.4
-Sin detección >15s → AUSENTE (pausa alertas)
-Sin movimiento >30min → INMOVIL (sedentarismo)
+Sin detección >15s → AUSENTE | Sin movimiento >30min → INMOVIL
 """
 
 import time
@@ -20,11 +19,26 @@ class EstadoPresencia(Enum):
     INMOVIL  = "inmovil"
 
 
+def _xy(punto) -> Optional[tuple]:
+    """Extrae (x, y) de PuntoLandmark o lista/tupla."""
+    if punto is None:
+        return None
+    if hasattr(punto, 'x'):
+        if getattr(punto, 'visibilidad', 1.0) < 0.4:
+            return None
+        return (punto.x, punto.y)
+    try:
+        vis = punto[3] if len(punto) > 3 else 1.0
+        return (punto[0], punto[1]) if vis > 0.4 else None
+    except Exception:
+        return None
+
+
 class DetectorAusencia:
-    SEGUNDOS_AUSENTE  = 15
-    SEGUNDOS_INMOVIL  = 1800
-    BUFFER_VARIANZA   = 300
-    UMBRAL_VARIANZA   = 0.0003
+    SEGUNDOS_AUSENTE = 15
+    SEGUNDOS_INMOVIL = 1800
+    BUFFER_VARIANZA  = 300
+    UMBRAL_VARIANZA  = 0.0003
 
     def __init__(self):
         self._inicio_sin_deteccion: Optional[float] = None
@@ -46,7 +60,9 @@ class DetectorAusencia:
 
         self._inicio_sin_deteccion = None
 
-        puntos = [landmarks.get(i) for i in [11,12,23,24] if landmarks.get(i)]
+        # Extraer posición media del torso
+        puntos = [_xy(landmarks.get(i)) for i in [11, 12, 23, 24]]
+        puntos = [p for p in puntos if p is not None]
         if puntos:
             self._buffer_x.append(np.mean([p[0] for p in puntos]))
             self._buffer_y.append(np.mean([p[1] for p in puntos]))
@@ -72,9 +88,7 @@ class DetectorAusencia:
 
     @property
     def tiempo_inmovil_segundos(self) -> float:
-        if self._inicio_inmovil is None:
-            return 0.0
-        return time.time() - self._inicio_inmovil
+        return 0.0 if self._inicio_inmovil is None else time.time() - self._inicio_inmovil
 
     @property
     def debe_alertar_sedentarismo(self) -> bool:

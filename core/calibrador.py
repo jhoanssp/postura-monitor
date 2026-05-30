@@ -112,20 +112,29 @@ class Calibrador:
 
     # ── Extracción de medidas por frame ──────────────────────────────────────
 
+    def _xy(self, lm: dict, idx: int) -> Optional[np.ndarray]:
+        """Extrae (x, y) de PuntoLandmark o lista/tupla."""
+        p = lm.get(idx)
+        if p is None: return None
+        if hasattr(p, 'x'):
+            if getattr(p, 'visibilidad', 1.0) < 0.4: return None
+            return np.array([p.x, p.y])
+        try:
+            vis = p[3] if len(p) > 3 else 1.0
+            return np.array(p[:2]) if vis > 0.4 else None
+        except Exception: return None
+
     def _extraer_medidas(self, lm: dict, vista: str) -> Optional[dict]:
         """Extrae medidas biomecánicas de un frame."""
         try:
-            # Landmarks clave
-            h_izq  = np.array(lm.get(11, [0,0,0])[:2])  # hombro izq
-            h_der  = np.array(lm.get(12, [0,0,0])[:2])  # hombro der
-            c_izq  = np.array(lm.get(23, [0,0,0])[:2])  # cadera izq
-            c_der  = np.array(lm.get(24, [0,0,0])[:2])  # cadera der
-            o_izq  = np.array(lm.get(7,  [0,0,0])[:2])  # oído izq
-            o_der  = np.array(lm.get(8,  [0,0,0])[:2])  # oído der
-            nariz  = np.array(lm.get(0,  [0,0,0])[:2])  # nariz
+            h_izq = self._xy(lm, 11)
+            h_der = self._xy(lm, 12)
+            c_izq = self._xy(lm, 23)
+            c_der = self._xy(lm, 24)
+            o_izq = self._xy(lm, 7)
+            o_der = self._xy(lm, 8)
 
-            # Verificar visibilidad mínima
-            if any(np.all(p == 0) for p in [h_izq, h_der, c_izq, c_der]):
+            if any(p is None for p in [h_izq, h_der, c_izq, c_der]):
                 return None
 
             hombro_medio = (h_izq + h_der) / 2
