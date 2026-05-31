@@ -86,16 +86,14 @@ class MonitorSegundoPlano:
             h, w = fp.shape[:2]
             det_p  = self._detector_p.detectar(fp)
             pres_p = self._ausencia_p.actualizar(det_p.landmarks)
-            vista_p = self._detectar_vista(det_p.landmarks)
-            res_p   = self._analizador_p.analizar(det_p.landmarks, vista_p) \
+            res_p   = self._analizador_p.analizar(det_p.landmarks, "auto") \
                       if pres_p == EstadoPresencia.PRESENTE else ResultadoAnalisis10(usuario_presente=False)
 
             res_s = None
             if self._captura.tiene_secundaria and fs is not None:
                 det_s  = self._detector_s.detectar(fs)
                 pres_s = self._ausencia_s.actualizar(det_s.landmarks)
-                vista_s = self._detectar_vista(det_s.landmarks)
-                res_s   = self._analizador_s.analizar(det_s.landmarks, vista_s) \
+                res_s   = self._analizador_s.analizar(det_s.landmarks, "auto") \
                           if pres_s == EstadoPresencia.PRESENTE else ResultadoAnalisis10(usuario_presente=False)
 
             resultado = self._fusionar(res_p, res_s)
@@ -117,6 +115,11 @@ class MonitorSegundoPlano:
                     inclinacion_lateral=resultado.inclinacion_lateral,
                 )
                 self._ultimo_bd = ahora
+
+            # No alertar si usuario está distraído
+            if getattr(resultado, 'usuario_distraido', False):
+                self._gestor_alertas.reset()
+                continue
 
             tipo_a = resultado.alertas_activas[0] if resultado.alertas_activas else "Mala postura"
             debe_alertar, tiempo_mala = self._gestor_alertas.actualizar(
@@ -143,14 +146,6 @@ class MonitorSegundoPlano:
                     self._local.alerta_sedentarismo(t_seg)
                     self._telegram.enviar_alerta_sedentarismo(t_seg)
                     if aid: self._base_datos.marcar_alerta_telegram(aid)
-
-    def _detectar_vista(self, lm: Optional[dict]) -> str:
-        """Detecta frontal vs lateral — compatible con PuntoLandmark."""
-        if not lm: return "frontal"
-        hi = lm.get(11); hd = lm.get(12)
-        if hi is None or hd is None: return "frontal"
-        dist_h = abs(_get_x(hi) - _get_x(hd))
-        return "lateral" if dist_h < 0.15 else "frontal"  # 0.15 más conservador
 
     def _fusionar(self, rp: ResultadoAnalisis10,
                   rs: Optional[ResultadoAnalisis10]) -> ResultadoAnalisis10:

@@ -1,12 +1,17 @@
 """
-Analizador de 10 posturas biomecánicas — v4.4.8
-Fuentes: Vaibhav 2025, Trygub 2023, Patel 2024, Pawitra 2025/2026, Sahoo 2026
+Analizador de 10 posturas biomecánicas — v4.4.9
+Correcciones:
+  - arctan2 con orden correcto para espejo MediaPipe
+  - Posturas 3/4 solo en lateral confirmado
+  - Brazos cruzados deshabilitados (falsos positivos en teclado)
+  - Detección de distracción (cabeza girada)
+  - Ignorar landmarks de dedos (17-22)
 """
 
 import numpy as np
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from utils.logger import crear_logger
 
 logger = crear_logger("analizador_posturas")
@@ -34,6 +39,7 @@ class ResultadoAnalisis10:
     nivel_global: NivelAlerta = NivelAlerta.CORRECTO
     vista_detectada: str = "frontal"
     usuario_presente: bool = True
+    usuario_distraido: bool = False
     debe_alertar: bool = False
     alertas_activas: List[str] = field(default_factory=list)
     angulo_cuello: Optional[float] = None
@@ -41,262 +47,276 @@ class ResultadoAnalisis10:
     inclinacion_lateral: Optional[float] = None
 
 
-def _angulo_vectores(v1: np.ndarray, v2: np.ndarray) -> float:
+def _ang(v1: np.ndarray, v2: np.ndarray) -> float:
     n1 = np.linalg.norm(v1); n2 = np.linalg.norm(v2)
     if n1 < 1e-8 or n2 < 1e-8: return 0.0
-    cos = np.dot(v1, v2) / (n1 * n2)
-    return float(np.degrees(np.arccos(np.clip(cos, -1, 1))))
+    return float(np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (n1 * n2), -1, 1))))
 
 
-def _punto(lm: dict, idx: int) -> Optional[np.ndarray]:
-    """Extrae (x, y) de PuntoLandmark o lista — compatible con ambos formatos."""
-    p = lm.get(idx)
-    if p is None: return None
-    if hasattr(p, 'x'):
-        if getattr(p, 'visibilidad', 1.0) < 0.4: return None
-        return np.array([p.x, p.y])
+def _p(lm: dict, idx: int) -> Optional[np.ndarray]:
+    """Extrae (x, y) compatible con PuntoLandmark y lista."""
+    pt = lm.get(idx)
+    if pt is None: return None
+    if hasattr(pt, 'x'):
+        if getattr(pt, 'visibilidad', 1.0) < 0.4: return None
+        return np.array([pt.x, pt.y])
     try:
-        vis = p[3] if len(p) > 3 else 1.0
-        return np.array(p[:2]) if vis > 0.4 else None
+        vis = pt[3] if len(pt) > 3 else 1.0
+        return np.array(pt[:2]) if vis > 0.4 else None
     except Exception: return None
 
 
-def _medio(a, b):
+def _m(a, b):
     if a is None or b is None: return None
     return (a + b) / 2
 
 
-EJE_V = np.array([0.0, -1.0])  # vertical hacia arriba (y decrece hacia arriba)
+EJE_V = np.array([0.0, -1.0])
 
 
 from core.calibrador import UmbralesPersonalizados
 
 
+# ── Gestor de vista estable ───────────────────────────────────────────────────
+
+class GestorVista:
+    """
+    Evita cambios bruscos de vista.
+    Requiere 10 frames consecutivos de "lateral" para cambiar desde frontal.
+    Requiere 5 frames de "frontal" para volver.
+    """
+    def __init__(self):
+        self._contador = 0   # positivo=lateral, negativo=frontal
+        self._vista    = "frontal"
+
+    def actualizar(self, lm: Optional[dict]) -> str:
+        if not lm:
+            return self._vista
+        hi = lm.get(11); hd = lm.get(12)
+        if hi is None or hd is None:
+            return self._vista
+
+        hix = hi.x if hasattr(hi, 'x') else float(hi[0])
+        hdx = hd.x if hasattr(hd, 'x') else float(hd[0])
+        dist = abs(hix - hdx)
+
+        if dist < 0.15:      # señal lateral
+            self._contador = min(self._contador + 1, 15)
+        else:                # señal frontal
+            self._contador = max(self._contador - 2, -10)
+
+        if   self._contador >= 10: self._vista = "lateral"
+        elif self._contador <= -3: self._vista = "frontal"
+
+        return self._vista
+
+
+# ── Analizador principal ──────────────────────────────────────────────────────
+
 class AnalizadorPosturas:
 
     def __init__(self, umbrales: Optional[UmbralesPersonalizados] = None):
-        self._u = umbrales or UmbralesPersonalizados()
+        self._u    = umbrales or UmbralesPersonalizados()
+        self._gv   = GestorVista()
 
     def actualizar_umbrales(self, u: UmbralesPersonalizados):
         self._u = u
 
-    def analizar(self, landmarks: dict, vista: str = "frontal") -> ResultadoAnalisis10:
+    def analizar(self, landmarks: dict, vista: str = "auto") -> ResultadoAnalisis10:
         if not landmarks:
             return ResultadoAnalisis10(usuario_presente=False)
 
+        # Vista estable
+        vista_estable = self._gv.actualizar(landmarks) if vista == "auto" else vista
+
+        # Detección de distracción antes de analizar posturas
+        distraido = self._detectar_distraccion(landmarks)
+        if distraido:
+            return ResultadoAnalisis10(
+                usuario_presente=True,
+                usuario_distraido=True,
+                nivel_global=NivelAlerta.CORRECTO,
+                vista_detectada=vista_estable,
+            )
+
         posturas: List[ResultadoPostura] = []
 
-        # Posturas laterales (cuello, tronco sagital)
-        if vista in ("lateral", "auto"):
+        # Posturas sagitales (solo en lateral confirmado)
+        if vista_estable == "lateral":
             posturas += self._p1_encorvamiento(landmarks)
             posturas += self._p2_flexion_cervical(landmarks)
             posturas += self._p3_tronco_adelante(landmarks)
             posturas += self._p4_tronco_atras(landmarks)
 
-        # Posturas frontales (asimetría)
-        if vista in ("frontal", "auto"):
+        # Posturas coronales (frontal)
+        if vista_estable == "frontal":
             posturas += self._p6_inclinacion_lateral_tronco(landmarks)
             posturas += self._p7_inclinacion_lateral_cuello(landmarks)
-            posturas += self._p8_brazos_cruzados(landmarks)
+            # p8 brazos cruzados deshabilitado — demasiados FP con teclado/mouse
             posturas += self._p9_piernas_cruzadas(landmarks)
 
-        # Postura 5: funciona en ambas vistas
+        # Postura 5 funciona en ambas
         posturas += self._p5_tronco_vertical(landmarks)
 
         niveles = [p.nivel for p in posturas]
-        if NivelAlerta.INCORRECTO in niveles:
-            global_ = NivelAlerta.INCORRECTO
-        elif NivelAlerta.ADVERTENCIA in niveles:
-            global_ = NivelAlerta.ADVERTENCIA
-        else:
-            global_ = NivelAlerta.CORRECTO
+        global_ = (NivelAlerta.INCORRECTO  if NivelAlerta.INCORRECTO  in niveles else
+                   NivelAlerta.ADVERTENCIA if NivelAlerta.ADVERTENCIA in niveles else
+                   NivelAlerta.CORRECTO)
 
         alertas = [p.nombre for p in posturas if p.nivel == NivelAlerta.INCORRECTO]
 
-        ang_cuello  = next((p.valor_medido for p in posturas if "Cervical" in p.nombre), None)
-        ang_espalda = next((p.valor_medido for p in posturas if "Encorvamiento" in p.nombre), None)
-        inc_lat     = next((p.valor_medido for p in posturas if "Lateral Tronco" in p.nombre), None)
-
         return ResultadoAnalisis10(
-            posturas=posturas, nivel_global=global_,
-            vista_detectada=vista, usuario_presente=True,
+            posturas=posturas,
+            nivel_global=global_,
+            vista_detectada=vista_estable,
+            usuario_presente=True,
+            usuario_distraido=False,
             debe_alertar=(global_ == NivelAlerta.INCORRECTO),
             alertas_activas=alertas,
-            angulo_cuello=ang_cuello, angulo_espalda=ang_espalda,
-            inclinacion_lateral=inc_lat,
+            angulo_cuello =next((p.valor_medido for p in posturas if "Cervical"     in p.nombre), None),
+            angulo_espalda=next((p.valor_medido for p in posturas if "Encorvam"     in p.nombre), None),
+            inclinacion_lateral=next((p.valor_medido for p in posturas if "Lateral Tronco" in p.nombre), None),
         )
 
+    # ── Detección de distracción ──────────────────────────────────────────────
+    # Si la relación entre el ancho de oídos y el ancho de hombros es muy baja
+    # → usuario giró la cabeza (no mira la pantalla)
+
+    def _detectar_distraccion(self, lm: dict) -> bool:
+        oi = _p(lm, 7); od = _p(lm, 8)   # oídos
+        hi = _p(lm, 11); hd = _p(lm, 12) # hombros
+        if any(x is None for x in [oi, od, hi, hd]): return False
+
+        ear_span      = abs(float(oi[0] - od[0]))
+        shoulder_span = abs(float(hi[0] - hd[0]))
+        if shoulder_span < 0.05: return False
+
+        ratio = ear_span / shoulder_span
+        # Cuando mira al frente: ratio ~0.6-0.9
+        # Cuando gira cabeza >45°: ratio < 0.35
+        return ratio < 0.30
+
     # ── Postura 1: Encorvamiento ──────────────────────────────────────────────
-    # Ángulo EN el hombro entre vector→cadera y vector→oído
+    # Ángulo EN el hombro: (hombro→cadera) vs (hombro→oído)
     # ~170° recto, <150° encorvado
-    # Ref: Vaibhav et al. 2025
 
     def _p1_encorvamiento(self, lm: dict) -> List[ResultadoPostura]:
-        h = _medio(_punto(lm, 11), _punto(lm, 12))
-        c = _medio(_punto(lm, 23), _punto(lm, 24))
-        o = _medio(_punto(lm, 7),  _punto(lm, 8))
-        if any(p is None for p in [h, c, o]): return []
-
-        # CORRECCIÓN: ángulo en el vértice hombro entre (hombro→cadera) y (hombro→oído)
-        # Cuando recto: ~170°. Cuando encorvado: <150°
-        ang = _angulo_vectores(c - h, o - h)
-        umbral = self._u.encorvamiento_alerta  # 150°
-
-        nivel = (NivelAlerta.INCORRECTO if ang < umbral
-                 else NivelAlerta.ADVERTENCIA if ang < umbral + 12
-                 else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Encorvamiento (Slouching)", nivel=nivel,
-            valor_medido=ang, umbral=umbral,
-            descripcion=f"Ángulo en hombro: {ang:.1f}° (correcto: >{umbral:.0f}°)",
-            vista="lateral",
-        )]
+        h = _m(_p(lm,11), _p(lm,12))
+        c = _m(_p(lm,23), _p(lm,24))
+        o = _m(_p(lm,7),  _p(lm,8))
+        if any(x is None for x in [h, c, o]): return []
+        a = _ang(c - h, o - h)
+        u = self._u.encorvamiento_alerta
+        n = (NivelAlerta.INCORRECTO  if a < u else
+             NivelAlerta.ADVERTENCIA if a < u + 12 else
+             NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Encorvamiento (Slouching)", n, a, u,
+            f"Ángulo hombro: {a:.1f}° (correcto: >{u:.0f}°)", "lateral")]
 
     # ── Postura 2: Flexión cervical excesiva ──────────────────────────────────
-    # Ángulo del vector oído-hombro respecto al eje vertical
-    # 0-15° normal, >30° excesivo
-    # Ref: Trygub et al. 2023
 
     def _p2_flexion_cervical(self, lm: dict) -> List[ResultadoPostura]:
-        o = _medio(_punto(lm, 7), _punto(lm, 8))
-        h = _medio(_punto(lm, 11), _punto(lm, 12))
+        o = _m(_p(lm,7), _p(lm,8))
+        h = _m(_p(lm,11), _p(lm,12))
         if o is None or h is None: return []
-        ang = _angulo_vectores(o - h, EJE_V)
-        umbral = self._u.neck_flexion_alerta  # 30°
+        a = _ang(o - h, EJE_V)
+        u = self._u.neck_flexion_alerta
+        n = (NivelAlerta.INCORRECTO  if a > u else
+             NivelAlerta.ADVERTENCIA if a > u - 8 else
+             NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Flexión Cervical Excesiva", n, a, u,
+            f"Inclinación cuello: {a:.1f}° (correcto: <{u:.0f}°)", "lateral")]
 
-        nivel = (NivelAlerta.INCORRECTO if ang > umbral
-                 else NivelAlerta.ADVERTENCIA if ang > umbral - 8
-                 else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Flexión Cervical Excesiva", nivel=nivel,
-            valor_medido=ang, umbral=umbral,
-            descripcion=f"Inclinación cuello: {ang:.1f}° (correcto: <{umbral:.0f}°)",
-            vista="lateral",
-        )]
-
-    # ── Postura 3: Tronco hacia adelante ──────────────────────────────────────
+    # ── Postura 3: Tronco hacia adelante (solo lateral) ───────────────────────
 
     def _p3_tronco_adelante(self, lm: dict) -> List[ResultadoPostura]:
-        h = _medio(_punto(lm, 11), _punto(lm, 12))
-        c = _medio(_punto(lm, 23), _punto(lm, 24))
+        h = _m(_p(lm,11), _p(lm,12))
+        c = _m(_p(lm,23), _p(lm,24))
         if h is None or c is None: return []
-        diff_x = float(h[0] - c[0])
-        umbral = self._u.tronco_adelante_alerta
+        dx = float(h[0] - c[0])
+        u  = self._u.tronco_adelante_alerta
+        n  = (NivelAlerta.INCORRECTO  if dx > u else
+              NivelAlerta.ADVERTENCIA if dx > u - 0.02 else
+              NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Tronco Proyectado Adelante", n, dx, u,
+            f"Desplazamiento: {dx:.3f}", "lateral")]
 
-        nivel = (NivelAlerta.INCORRECTO if diff_x > umbral
-                 else NivelAlerta.ADVERTENCIA if diff_x > umbral - 0.02
-                 else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Tronco Proyectado Adelante", nivel=nivel,
-            valor_medido=diff_x, umbral=umbral,
-            descripcion=f"Desplazamiento h-c: {diff_x:.3f}",
-            vista="lateral",
-        )]
-
-    # ── Postura 4: Tronco hacia atrás ─────────────────────────────────────────
+    # ── Postura 4: Tronco hacia atrás (solo lateral) ──────────────────────────
 
     def _p4_tronco_atras(self, lm: dict) -> List[ResultadoPostura]:
-        h = _medio(_punto(lm, 11), _punto(lm, 12))
-        c = _medio(_punto(lm, 23), _punto(lm, 24))
+        h = _m(_p(lm,11), _p(lm,12))
+        c = _m(_p(lm,23), _p(lm,24))
         if h is None or c is None: return []
-        diff_x = float(h[0] - c[0])
-        umbral = self._u.tronco_atras_alerta
-
-        nivel = (NivelAlerta.INCORRECTO if diff_x < umbral
-                 else NivelAlerta.ADVERTENCIA if diff_x < umbral + 0.02
-                 else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Tronco Recostado Atrás", nivel=nivel,
-            valor_medido=diff_x, umbral=umbral,
-            descripcion=f"Reclinación: {diff_x:.3f} (correcto: >{umbral:.3f})",
-            vista="lateral",
-        )]
+        dx = float(h[0] - c[0])
+        u  = self._u.tronco_atras_alerta
+        n  = (NivelAlerta.INCORRECTO  if dx < u else
+              NivelAlerta.ADVERTENCIA if dx < u + 0.02 else
+              NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Tronco Recostado Atrás", n, dx, u,
+            f"Reclinación: {dx:.3f} (correcto: >{u:.3f})", "lateral")]
 
     # ── Postura 5: Desviación tronco >20° ────────────────────────────────────
 
     def _p5_tronco_vertical(self, lm: dict) -> List[ResultadoPostura]:
-        h = _medio(_punto(lm, 11), _punto(lm, 12))
-        c = _medio(_punto(lm, 23), _punto(lm, 24))
+        h = _m(_p(lm,11), _p(lm,12))
+        c = _m(_p(lm,23), _p(lm,24))
         if h is None or c is None: return []
-        ang = _angulo_vectores(h - c, EJE_V)
-        umbral = self._u.tronco_vertical_alerta  # 20°
-
-        nivel = (NivelAlerta.INCORRECTO if ang > umbral
-                 else NivelAlerta.ADVERTENCIA if ang > umbral - 5
-                 else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Desviación Tronco Vertical", nivel=nivel,
-            valor_medido=ang, umbral=umbral,
-            descripcion=f"Desviación torso: {ang:.1f}° (correcto: <{umbral:.0f}°)",
-            vista="ambas",
-        )]
+        a = _ang(h - c, EJE_V)
+        u = self._u.tronco_vertical_alerta
+        n = (NivelAlerta.INCORRECTO  if a > u else
+             NivelAlerta.ADVERTENCIA if a > u - 5 else
+             NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Desviación Tronco Vertical", n, a, u,
+            f"Desviación: {a:.1f}° (correcto: <{u:.0f}°)", "ambas")]
 
     # ── Postura 6: Inclinación lateral tronco ─────────────────────────────────
-    # Umbral elevado a 20° para reducir falsos positivos por asimetría natural
+    # CORRECCIÓN: MediaPipe LM11 (izq persona) aparece a la DERECHA en imagen
+    # Usar (hi - hd) en lugar de (hd - hi) para obtener ángulo cercano a 0° cuando recto
 
     def _p6_inclinacion_lateral_tronco(self, lm: dict) -> List[ResultadoPostura]:
-        hi = _punto(lm, 11); hd = _punto(lm, 12)
+        hi = _p(lm, 11); hd = _p(lm, 12)
         if hi is None or hd is None: return []
-        ang = abs(float(np.degrees(np.arctan2(hd[1] - hi[1], hd[0] - hi[0]))))
-        umbral = self._u.inclinacion_lateral_tronco  # 20°
-
-        nivel = (NivelAlerta.INCORRECTO if ang > umbral
-                 else NivelAlerta.ADVERTENCIA if ang > umbral - 5
-                 else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Inclinación Lateral Tronco", nivel=nivel,
-            valor_medido=ang, umbral=umbral,
-            descripcion=f"Asimetría hombros: {ang:.1f}° (correcto: <{umbral:.0f}°)",
-            vista="frontal",
-        )]
+        # hi está a la DERECHA de la imagen → hi[0] > hd[0]
+        dx = float(hi[0] - hd[0])  # positivo
+        dy = float(hi[1] - hd[1])  # ~0 cuando nivelado
+        a  = abs(float(np.degrees(np.arctan2(dy, dx))))
+        u  = self._u.inclinacion_lateral_tronco  # 20°
+        n  = (NivelAlerta.INCORRECTO  if a > u else
+              NivelAlerta.ADVERTENCIA if a > u - 5 else
+              NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Inclinación Lateral Tronco", n, a, u,
+            f"Asimetría hombros: {a:.1f}° (correcto: <{u:.0f}°)", "frontal")]
 
     # ── Postura 7: Inclinación lateral cuello ─────────────────────────────────
+    # Misma corrección: oi (LM7, oído izq persona) aparece a la DERECHA
 
     def _p7_inclinacion_lateral_cuello(self, lm: dict) -> List[ResultadoPostura]:
-        oi = _punto(lm, 7); od = _punto(lm, 8)
+        oi = _p(lm, 7); od = _p(lm, 8)
         if oi is None or od is None: return []
-        ang = abs(float(np.degrees(np.arctan2(od[1] - oi[1], od[0] - oi[0]))))
-        umbral = self._u.inclinacion_lateral_cuello  # 15°
+        dx = float(oi[0] - od[0])  # oi a la derecha → positivo
+        dy = float(oi[1] - od[1])
+        a  = abs(float(np.degrees(np.arctan2(dy, dx))))
+        u  = self._u.inclinacion_lateral_cuello  # 15°
+        n  = (NivelAlerta.INCORRECTO  if a > u else
+              NivelAlerta.ADVERTENCIA if a > u - 4 else
+              NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Inclinación Lateral Cuello", n, a, u,
+            f"Head tilt: {a:.1f}° (correcto: <{u:.0f}°)", "frontal")]
 
-        nivel = (NivelAlerta.INCORRECTO if ang > umbral
-                 else NivelAlerta.ADVERTENCIA if ang > umbral - 4
-                 else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Inclinación Lateral Cuello", nivel=nivel,
-            valor_medido=ang, umbral=umbral,
-            descripcion=f"Head tilt: {ang:.1f}° (correcto: <{umbral:.0f}°)",
-            vista="frontal",
-        )]
-
-    # ── Postura 8: Brazos cruzados ────────────────────────────────────────────
+    # ── Postura 8: Brazos cruzados — DESHABILITADA ────────────────────────────
+    # Demasiados falsos positivos al usar teclado/mouse en posición lateral
+    # Se deja como método para futura activación opcional
 
     def _p8_brazos_cruzados(self, lm: dict) -> List[ResultadoPostura]:
-        mi = _punto(lm, 15); md = _punto(lm, 16)
-        ci = _punto(lm, 13); cd = _punto(lm, 14)
-        if any(p is None for p in [mi, md, ci, cd]): return []
-        val = min(float(np.linalg.norm(mi - cd)), float(np.linalg.norm(md - ci)))
-        umbral = self._u.brazos_cruzados_dist
-
-        nivel = (NivelAlerta.ADVERTENCIA if val < umbral else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Brazos Cruzados", nivel=nivel,
-            valor_medido=val, umbral=umbral,
-            descripcion=f"Cruce muñeca-codo: {val:.3f} (correcto: >{umbral:.3f})",
-            vista="frontal",
-        )]
+        return []  # deshabilitado
 
     # ── Postura 9: Piernas cruzadas ───────────────────────────────────────────
 
     def _p9_piernas_cruzadas(self, lm: dict) -> List[ResultadoPostura]:
-        ri = _punto(lm, 25); rd = _punto(lm, 26)
+        ri = _p(lm, 25); rd = _p(lm, 26)
         if ri is None or rd is None: return []
         diff = abs(float(ri[0] - rd[0]))
-        umbral = self._u.piernas_cruzadas_dist
-
-        nivel = (NivelAlerta.ADVERTENCIA if diff < umbral else NivelAlerta.CORRECTO)
-        return [ResultadoPostura(
-            nombre="Piernas Cruzadas", nivel=nivel,
-            valor_medido=diff, umbral=umbral,
-            descripcion=f"Separación rodillas: {diff:.3f} (correcto: >{umbral:.3f})",
-            vista="frontal",
-        )]
+        u    = self._u.piernas_cruzadas_dist
+        n    = (NivelAlerta.ADVERTENCIA if diff < u else NivelAlerta.CORRECTO)
+        return [ResultadoPostura("Piernas Cruzadas", n, diff, u,
+            f"Separación rodillas: {diff:.3f} (correcto: >{u:.3f})", "frontal")]

@@ -58,6 +58,11 @@ def _dibujar_hud(frame: np.ndarray, resultado: ResultadoAnalisis10,
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (128, 128, 128), 2)
         return frame
 
+    if getattr(resultado, 'usuario_distraido', False):
+        cv2.putText(frame, "USUARIO DISTRAIDO", (w//2 - 140, h//2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 2)
+        return frame
+
     # Panel superior
     overlay = frame.copy()
     cv2.rectangle(overlay, (0, 0), (min(460, w), 95), (15, 15, 15), -1)
@@ -111,13 +116,7 @@ def _dibujar_hud(frame: np.ndarray, resultado: ResultadoAnalisis10,
     return frame
 
 
-def _detectar_vista_lm(lm):
-    if not lm: return "frontal"
-    hi = lm.get(11); hd = lm.get(12)
-    if hi is None or hd is None: return "frontal"
-    hix = hi.x if hasattr(hi, 'x') else hi[0]
-    hdx = hd.x if hasattr(hd, 'x') else hd[0]
-    return "lateral" if abs(hix - hdx) < 0.15 else "frontal"  # 0.15 más conservador
+# Vista manejada por GestorVista interno en AnalizadorPosturas (pasa "auto")
 
 
 # ── Modo DEBUG — captura directa (más confiable en binario) ──────────────────
@@ -208,7 +207,7 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
             # ── Análisis principal ────────────────────────────────────────
             det_p   = detector_p.detectar(fp)
             pres_p  = ausencia_p.actualizar(det_p.landmarks)
-            vista_p = _detectar_vista_lm(det_p.landmarks)
+            vista_p = "auto"
 
             if mostrar_esq and det_p.pose_detectada:
                 detector_p.dibujar_esqueleto(fp, det_p.landmarks_raw)
@@ -222,7 +221,7 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
             if cap_s and fs is not None and detector_s:
                 det_s   = detector_s.detectar(fs)
                 pres_s  = ausencia_s.actualizar(det_s.landmarks)
-                vista_s = _detectar_vista_lm(det_s.landmarks)
+                vista_s = "auto"
                 if mostrar_esq and det_s.pose_detectada:
                     detector_s.dibujar_esqueleto(fs, det_s.landmarks_raw)
                 res_s = analizador_s.analizar(det_s.landmarks, vista_s) \
@@ -235,6 +234,10 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
 
             ultimo_resultado = resultado
 
+            # ── Saltar análisis si distraído ─────────────────────────────
+            if getattr(resultado, 'usuario_distraido', False):
+                gestor_alertas.reset()
+
             # ── Gestor de alertas (cooldown + tiempo mínimo) ──────────────
             tipo_alerta = resultado.alertas_activas[0] if resultado.alertas_activas else "Mala postura"
             debe_alertar, tiempo_mala = gestor_alertas.actualizar(
@@ -244,14 +247,15 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
 
             # ── HUD ───────────────────────────────────────────────────────
             if mostrar_hud:
-                fp = _dibujar_hud(fp, resultado, vista_p, modo_cam, tiempo_acum)
+                vista_label = resultado.vista_detectada if hasattr(resultado, 'vista_detectada') else "auto"
+                fp = _dibujar_hud(fp, resultado, vista_label, modo_cam, tiempo_acum)
 
             cv2.imshow(win_p, fp)
 
             if cap_s and fs is not None:
                 if mostrar_hud and res_s:
                     fs = _dibujar_hud(fs, res_s,
-                                      _detectar_vista_lm(det_s.landmarks if det_s else None),
+                                      "auto",
                                       "SEC")
                 cv2.imshow(win_s, fs)
 

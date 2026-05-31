@@ -167,9 +167,11 @@ class Calibrador:
             torso_deg = float(np.degrees(np.arccos(np.clip(cos_t, -1, 1))))
 
             # Inclinación lateral (postura 6)
-            inc_lat = float(np.degrees(np.arctan2(
-                h_der[1] - h_izq[1], h_der[0] - h_izq[0]
-            )))
+            # CORRECCIÓN: h_izq (LM11) aparece a la DERECHA en imagen
+            # Usar (h_izq - h_der) para obtener ~0° cuando nivelado
+            inc_lat = abs(float(np.degrees(np.arctan2(
+                h_izq[1] - h_der[1], h_izq[0] - h_der[0]
+            ))))
 
             return {
                 "altura_torso": altura_torso,
