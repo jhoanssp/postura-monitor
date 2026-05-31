@@ -44,6 +44,7 @@ a = Analysis(
         "core.analizador_posturas",      # ← nuevo v4.4
         "core.detector_ausencia",        # ← nuevo v4.4
         "core.calibrador",               # ← nuevo v4.4
+        "core.gestor_alertas",           # ← nuevo v4.4
         "core.monitor_segundo_plano",
         "core.bandeja",
         "database.base_datos",

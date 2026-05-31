@@ -14,6 +14,7 @@ from core.calibrador import Calibrador
 from database.base_datos import BaseDatosPostura
 from notifications.notificaciones import GestorNotificacionesTelegram
 from notifications.local import GestorNotificacionesLocal
+from core.gestor_alertas import GestorAlertas
 from utils.logger import crear_logger
 
 logger = crear_logger("monitor_segundo_plano")
@@ -44,6 +45,10 @@ class MonitorSegundoPlano:
         self._base_datos     = BaseDatosPostura()
         self._telegram       = GestorNotificacionesTelegram(telegram)
         self._local          = GestorNotificacionesLocal()
+        self._gestor_alertas = GestorAlertas(
+            segundos_antes_alerta=10,
+            cooldown_segundos=120,
+        )
 
         self.activo          = False
         self.sesion_id       = None
@@ -113,13 +118,17 @@ class MonitorSegundoPlano:
                 )
                 self._ultimo_bd = ahora
 
-            if resultado.debe_alertar and resultado.usuario_presente:
-                tipo = resultado.alertas_activas[0] if resultado.alertas_activas else "Mala postura"
-                aid  = self._base_datos.guardar_alerta(
-                    sesion_id=self.sesion_id, tipo_alerta=tipo, tiempo_mala_postura=0)
-                self._local.alerta_postura(tipo, 0, resultado.angulo_cuello)
+            tipo_a = resultado.alertas_activas[0] if resultado.alertas_activas else "Mala postura"
+            debe_alertar, tiempo_mala = self._gestor_alertas.actualizar(
+                resultado.nivel_global, tipo_a
+            )
+            if debe_alertar and resultado.usuario_presente:
+                aid = self._base_datos.guardar_alerta(
+                    sesion_id=self.sesion_id, tipo_alerta=tipo_a,
+                    tiempo_mala_postura=tiempo_mala)
+                self._local.alerta_postura(tipo_a, tiempo_mala, resultado.angulo_cuello)
                 env = self._telegram.enviar_alerta_postura(
-                    tipo_alerta=tipo, tiempo_mala_postura=0,
+                    tipo_alerta=tipo_a, tiempo_mala_postura=tiempo_mala,
                     angulo_cuello=resultado.angulo_cuello,
                     angulo_espalda=resultado.angulo_espalda,
                 )
