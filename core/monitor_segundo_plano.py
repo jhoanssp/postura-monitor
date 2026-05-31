@@ -150,7 +150,7 @@ class MonitorSegundoPlano:
         hi = lm.get(11); hd = lm.get(12)
         if hi is None or hd is None: return "frontal"
         dist_h = abs(_get_x(hi) - _get_x(hd))
-        return "lateral" if dist_h < 0.25 else "frontal"
+        return "lateral" if dist_h < 0.15 else "frontal"  # 0.15 más conservador
 
     def _fusionar(self, rp: ResultadoAnalisis10,
                   rs: Optional[ResultadoAnalisis10]) -> ResultadoAnalisis10:

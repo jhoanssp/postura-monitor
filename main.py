@@ -117,13 +117,14 @@ def _detectar_vista_lm(lm):
     if hi is None or hd is None: return "frontal"
     hix = hi.x if hasattr(hi, 'x') else hi[0]
     hdx = hd.x if hasattr(hd, 'x') else hd[0]
-    return "lateral" if abs(hix - hdx) < 0.25 else "frontal"
+    return "lateral" if abs(hix - hdx) < 0.15 else "frontal"  # 0.15 más conservador
 
 
 # ── Modo DEBUG — captura directa (más confiable en binario) ──────────────────
 
 def ejecutar_modo_debug(indice_secundario=None) -> None:
     logger.info("MODO DEBUG v4.4")
+    ANALIZAR_CADA = 3  # analiza 1 de cada 3 frames → ~10 análisis/s, muestra 30fps
 
     disponibles = detectar_camaras_disponibles()
     if not disponibles:
@@ -168,6 +169,8 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
     analizador_s = AnalizadorPosturas(umbrales_custom) if cap_s else None
     ausencia_p   = DetectorAusencia()
     ausencia_s   = DetectorAusencia() if cap_s else None
+    frame_num = 0
+    ultimo_resultado = ResultadoAnalisis10(usuario_presente=True)
     gestor_alertas = GestorAlertas(
         segundos_antes_alerta=10,
         cooldown_segundos=120,
@@ -229,6 +232,8 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
             # ── Fusionar ──────────────────────────────────────────────────
             mon = MonitorSegundoPlano.__new__(MonitorSegundoPlano)
             resultado = mon._fusionar(res_p, res_s) if res_s else res_p
+
+            ultimo_resultado = resultado
 
             # ── Gestor de alertas (cooldown + tiempo mínimo) ──────────────
             tipo_alerta = resultado.alertas_activas[0] if resultado.alertas_activas else "Mala postura"

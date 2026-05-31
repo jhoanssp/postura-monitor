@@ -49,7 +49,7 @@ class UmbralesPersonalizados:
 
     # Posturas 5-7 (frontal/lateral)
     tronco_vertical_alerta: float = 20.0
-    inclinacion_lateral_tronco: float = 12.0
+    inclinacion_lateral_tronco: float = 20.0  # aumentado para reducir FP
     inclinacion_lateral_cuello: float = 15.0
 
     # Posturas 8-9 (frontal)
@@ -147,10 +147,11 @@ class Calibrador:
             dist_oido_hombro   = float(np.linalg.norm(oido_medio - hombro_medio))
 
             # Ángulo de encorvamiento (postura 1)
-            vec_ab = hombro_medio - cadera_medio
-            vec_bc = oido_medio - hombro_medio
-            cos_ang = np.dot(vec_ab, vec_bc) / (
-                np.linalg.norm(vec_ab) * np.linalg.norm(vec_bc) + 1e-6
+            # Ángulo EN el hombro: vectors desde hombro→cadera y hombro→oído
+            vec1 = cadera_medio - hombro_medio  # apunta hacia abajo
+            vec2 = oido_medio - hombro_medio    # apunta hacia arriba
+            cos_ang = np.dot(vec1, vec2) / (
+                np.linalg.norm(vec1) * np.linalg.norm(vec2) + 1e-6
             )
             enc_deg = float(np.degrees(np.arccos(np.clip(cos_ang, -1, 1))))
 
@@ -232,9 +233,8 @@ class Calibrador:
         f = np.clip(perfil.factor_distancia, 0.5, 2.0)
 
         # Postura 1: encorvamiento — umbral relativo a su ángulo base
-        u.encorvamiento_alerta = max(
-            130.0, perfil.encorvamiento_base_deg - 20.0
-        )
+        # Con la fórmula corregida, base ~170°. Alerta a 15° menos que su base.
+        u.encorvamiento_alerta = max(145.0, perfil.encorvamiento_base_deg - 15.0)
 
         # Postura 2: flexión cervical — margen de 15° sobre su base
         u.neck_flexion_alerta = perfil.neck_base_deg + 15.0
