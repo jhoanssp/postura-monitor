@@ -199,10 +199,10 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
             if not ok_p or fp is None:
                 time.sleep(0.02); continue
 
-            fs = None
+            fs_raw = None
             if cap_s:
-                ok_s, fs = cap_s.read()
-                if not ok_s: fs = None
+                ok_s, fs_raw = cap_s.read()
+                fs = cv2.flip(fs_raw, 1) if (ok_s and fs_raw is not None) else None
 
             # ── Análisis principal ────────────────────────────────────────
             det_p   = detector_p.detectar(fp)

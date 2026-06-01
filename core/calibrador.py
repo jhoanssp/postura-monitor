@@ -31,6 +31,7 @@ class PerfilCorporal:
 
     # Distancia estimada a la cámara (relativa)
     factor_distancia: float = 1.0    # >1 lejos, <1 cerca
+    encorvamiento_frontal_base: float = 0.90  # ratio nariz-hombros en postura correcta
 
     # Metadatos
     vista: str = "frontal"           # frontal | lateral
@@ -56,7 +57,9 @@ class UmbralesPersonalizados:
     brazos_cruzados_dist: float = 0.30
     piernas_cruzadas_dist: float = 0.05
 
-    # Postura 10
+    # Postura 10: encorvamiento frontal (ratio nariz-hombros/ancho-hombros)
+    encorvamiento_frontal_min: float = 0.68  # recto ~0.90, encorvado <0.68
+    # Sedentarismo
     sedentarismo_segundos: int = 1800  # 30 min
 
 
@@ -173,8 +176,17 @@ class Calibrador:
                 h_izq[1] - h_der[1], h_izq[0] - h_der[0]
             ))))
 
+            # Ratio encorvamiento frontal
+            nariz = self._xy(lm, 0)
+            if nariz is not None and shoulder_w > 0.01:
+                hombro_y_med = float((hombro_izq[1] + hombro_der[1]) / 2)
+                enc_frontal_ratio = float((hombro_y_med - nariz[1]) / shoulder_w)
+            else:
+                enc_frontal_ratio = 0.90
+
             return {
                 "altura_torso": altura_torso,
+                "enc_frontal_ratio": enc_frontal_ratio,
                 "ancho_hombros": ancho_hombros,
                 "dist_oido_hombro": dist_oido_hombro,
                 "enc_deg": enc_deg,
@@ -198,7 +210,7 @@ class Calibrador:
             filtrado = arr[(arr >= q1 - 1.5*iqr) & (arr <= q3 + 1.5*iqr)]
             return float(np.mean(filtrado)) if len(filtrado) > 0 else float(np.mean(arr))
 
-        keys = ["altura_torso","ancho_hombros","dist_oido_hombro",
+        keys = ["altura_torso","ancho_hombros","dist_oido_hombro","enc_frontal_ratio",
                 "enc_deg","neck_deg","torso_deg","inc_lat"]
         vals = {k: [f[k] for f in self._frames_buffer if k in f] for k in keys}
 
@@ -208,7 +220,10 @@ class Calibrador:
         altura_media = mediana_robusta(vals["altura_torso"])
         factor_dist  = REFERENCIA_TORSO / (altura_media + 1e-6)
 
+        enc_frontal = mediana_robusta(vals["enc_frontal_ratio"]) if vals.get("enc_frontal_ratio") else 0.90
+
         return PerfilCorporal(
+            encorvamiento_frontal_base = enc_frontal,
             altura_torso           = altura_media,
             ancho_hombros          = mediana_robusta(vals["ancho_hombros"]),
             distancia_oido_hombro  = mediana_robusta(vals["dist_oido_hombro"]),
@@ -255,6 +270,10 @@ class Calibrador:
         # Posturas 8/9: escalar por ancho corporal del usuario
         u.brazos_cruzados_dist  = perfil.ancho_hombros * 0.8
         u.piernas_cruzadas_dist = perfil.ancho_hombros * 0.15
+
+        # Encorvamiento frontal: base del usuario menos margen de 18%
+        if hasattr(perfil, 'encorvamiento_frontal_base') and perfil.encorvamiento_frontal_base > 0:
+            u.encorvamiento_frontal_min = max(0.60, perfil.encorvamiento_frontal_base - 0.18)
 
         logger.info(
             f"Umbrales calculados para usuario "
