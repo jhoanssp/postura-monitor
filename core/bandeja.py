@@ -1,6 +1,6 @@
 """
-Ícono en la bandeja del sistema — v4.3
-Menú contextual con: estado, pausar, configuración, desinstalar, salir.
+Ícono en la bandeja del sistema — v4.5
+Menú contextual con: estado, pausar, configuración, calibrar, desinstalar, salir.
 """
 
 import sys
@@ -115,6 +115,12 @@ class BandejaSistema(QObject):
         )
         self._act_config.triggered.connect(self.abrir_config.emit)
 
+        # Calibrar (NUEVO)
+        self._act_calibrar = self._menu.addAction(
+            "📏  " + ("Calibrar postura" if I18n.idioma() == "es" else "Calibrate posture")
+        )
+        self._act_calibrar.triggered.connect(self._ejecutar_calibracion)
+
         self._menu.addSeparator()
 
         # Desinstalar
@@ -199,6 +205,25 @@ class BandejaSistema(QObject):
                 self._tray.contextMenu().popup(
                     self._tray.geometry().center()
                 )
+
+    # ── Calibración desde bandeja ─────────────────────────────────────────────
+
+    def _ejecutar_calibracion(self):
+        """Lanza el proceso de calibración frontal en una ventana independiente."""
+        # Detener temporalmente el monitor si está corriendo? No es necesario,
+        # la calibración usa su propia cámara y no interfiere.
+        try:
+            # Ruta al ejecutable
+            if getattr(sys, 'frozen', False):
+                exe = sys.executable
+                script = str(Path(__file__).parent.parent / "main.py")
+                subprocess.Popen([exe, script, "--calibrar"])
+            else:
+                subprocess.Popen([sys.executable, "-m", "main", "--calibrar"])
+            logger.info("Calibración lanzada desde bandeja.")
+        except Exception as e:
+            logger.error(f"Error lanzando calibración: {e}")
+            QMessageBox.warning(None, "Error", "No se pudo iniciar la calibración.")
 
     # ── Desinstalar desde bandeja ─────────────────────────────────────────────
 

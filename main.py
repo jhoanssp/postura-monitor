@@ -1,6 +1,7 @@
 """
-SISTEMA DE MONITOREO DE POSTURA — v4.4
+SISTEMA DE MONITOREO DE POSTURA — v4.5
 Punto de entrada principal.
+Añadido: --calibrar y tecla [C] para calibración frontal.
 """
 
 import argparse, sys, time, signal, os
@@ -35,6 +36,73 @@ def verificar_onboarding() -> bool:
         return mostrar_onboarding_si_necesario()
     except ImportError as e:
         logger.error(f"onboarding: {e}"); return True
+
+
+# ── Función de calibración frontal reutilizable ───────────────────────────────
+
+def ejecutar_calibracion_frontal(indice_camara: int = 0) -> bool:
+    """
+    Calibración frontal: pide al usuario mantener postura correcta 5 segundos.
+    Devuelve True si exitosa, False si falla o se cancela.
+    """
+    print("\n=== CALIBRACIÓN DE POSTURA FRONTAL ===")
+    print("Siéntate recto, mira al frente y mantén la posición.")
+    print("La cámara capturará tus medidas durante 5 segundos.")
+    print("Presiona ESC para cancelar.\n")
+
+    cap = cv2.VideoCapture(indice_camara)
+    if not cap.isOpened():
+        print("❌ No se pudo abrir la cámara.")
+        return False
+
+    detector = DetectorPostura()
+    calibrador = Calibrador()
+    calibrador.iniciar()
+
+    frames_necesarios = calibrador.FRAMES_REQUERIDOS
+    frames_actuales = 0
+    inicio_tiempo = time.time()
+
+    cv2.namedWindow("Calibración - Mantén postura correcta", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Calibración - Mantén postura correcta", 640, 480)
+
+    while frames_actuales < frames_necesarios:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        resultado = detector.detectar(frame)
+        if resultado.pose_detectada:
+            # Dibujar esqueleto
+            detector.dibujar_esqueleto(frame, resultado.landmarks_raw)
+
+            # Agregar frame a calibración
+            progreso = calibrador.agregar_frame(resultado.landmarks, vista="frontal")
+            frames_actuales = int(progreso * frames_necesarios)
+
+            # Mostrar barra de progreso
+            h, w = frame.shape[:2]
+            cv2.rectangle(frame, (0, h-20), (int(w * progreso), h), (52,199,89), -1)
+            cv2.putText(frame, f"Progreso: {int(progreso*100)}%", (10, h-30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+
+        cv2.imshow("Calibración - Mantén postura correcta", frame)
+        if cv2.waitKey(1) & 0xFF == 27:  # ESC cancelar
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+    perfil = calibrador.finalizar("frontal")
+    if perfil:
+        print("\n✅ Calibración completada.")
+        print(f"   Altura torso: {perfil.altura_torso:.3f}")
+        print(f"   Ángulo cuello base: {perfil.neck_base_deg:.1f}°")
+        print(f"   Factor distancia: {perfil.factor_distancia:.2f}")
+        return True
+    else:
+        print("\n❌ Calibración fallida. Intenta de nuevo.")
+        return False
 
 
 # ── HUD para debug ────────────────────────────────────────────────────────────
@@ -110,19 +178,16 @@ def _dibujar_hud(frame: np.ndarray, resultado: ResultadoAnalisis10,
         cv2.rectangle(ov3, (0, 0), (w - 1, h - 1), (0, 0, 220), 4)
         cv2.addWeighted(ov3, alpha, frame, 1 - alpha, 0, frame)
 
-    cv2.putText(frame, "[Q]Salir [S]Esqueleto [A]HUD [T]Test",
+    cv2.putText(frame, "[Q]Salir [S]Esqueleto [A]HUD [T]Test [C]Calibrar",
                 (8, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
                 (120, 120, 120), 1)
     return frame
 
 
-# Vista manejada por GestorVista interno en AnalizadorPosturas (pasa "auto")
-
-
 # ── Modo DEBUG — captura directa (más confiable en binario) ──────────────────
 
 def ejecutar_modo_debug(indice_secundario=None) -> None:
-    logger.info("MODO DEBUG v4.4")
+    logger.info("MODO DEBUG v4.5")
     ANALIZAR_CADA = 3  # analiza 1 de cada 3 frames → ~10 análisis/s, muestra 30fps
 
     disponibles = detectar_camaras_disponibles()
@@ -168,7 +233,6 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
     analizador_s = AnalizadorPosturas(umbrales_custom) if cap_s else None
     ausencia_p   = DetectorAusencia()
     ausencia_s   = DetectorAusencia() if cap_s else None
-    frame_num = 0
     ultimo_resultado = ResultadoAnalisis10(usuario_presente=True)
     gestor_alertas = GestorAlertas(
         segundos_antes_alerta=10,
@@ -183,7 +247,7 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
     mostrar_esq = True
 
     # Crear ventana con tamaño fijo
-    win_p = "Monitor de Postura v4.4 — DEBUG [Q=Salir]"
+    win_p = "Monitor de Postura v4.5 — DEBUG [Q=Salir, C=Calibrar]"
     cv2.namedWindow(win_p, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win_p, 960, 540)
 
@@ -298,6 +362,9 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
                 mostrar_hud = not mostrar_hud
             elif tecla in (ord("t"), ord("T")):
                 notificaciones.enviar_prueba()
+            elif tecla in (ord("c"), ord("C")):
+                # Calibración frontal desde debug
+                ejecutar_calibracion_frontal(idx_p)
 
     except KeyboardInterrupt:
         logger.info("Debug interrumpido por usuario.")
@@ -320,7 +387,7 @@ def ejecutar_modo_debug(indice_secundario=None) -> None:
 # ── Modo PRODUCCIÓN ───────────────────────────────────────────────────────────
 
 def ejecutar_modo_produccion(indice_secundario=None) -> None:
-    logger.info("MODO PRODUCCIÓN v4.4")
+    logger.info("MODO PRODUCCIÓN v4.5")
 
     from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import QTimer
@@ -377,12 +444,13 @@ def ejecutar_modo_produccion(indice_secundario=None) -> None:
 # ── Argumentos ────────────────────────────────────────────────────────────────
 
 def parsear_argumentos():
-    p = argparse.ArgumentParser(description="Monitor de Postura v4.4")
+    p = argparse.ArgumentParser(description="Monitor de Postura v4.5")
     p.add_argument("--modo",     choices=["debug", "produccion"], default="produccion")
     p.add_argument("--camara",   type=int, default=0)
     p.add_argument("--camara2",  type=int, default=None)
     p.add_argument("--skip-onboarding", action="store_true")
     p.add_argument("--configurar", action="store_true")
+    p.add_argument("--calibrar", action="store_true", help="Ejecuta calibración frontal y sale")
     return p.parse_args()
 
 
@@ -390,6 +458,11 @@ if __name__ == "__main__":
     args = parsear_argumentos()
     I18n.cargar()
     camara.indice_camara = args.camara
+
+    # Modo calibración directa
+    if args.calibrar:
+        exito = ejecutar_calibracion_frontal(args.camara)
+        sys.exit(0 if exito else 1)
 
     if args.configurar:
         from onboarding.wizard import mostrar_configuracion

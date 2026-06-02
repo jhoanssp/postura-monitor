@@ -1,11 +1,12 @@
 """
-Asistente de configuración inicial — v4.4
+Asistente de configuración inicial — v4.5
 - Imagen monitoreo-postura.jpg en bienvenida
 - Logo logo.png en sidebar
 - Sin selector de idioma
 - Ventana adaptativa
 - Autoarranque opcional
 - Botón desinstalar
+- NUEVO: Pantalla de calibración frontal opcional (Opción C)
 """
 
 import sys, os, re, subprocess, requests
@@ -132,7 +133,7 @@ class EnviadorPrueba(QThread):
             self.resultado.emit(f"Error: {str(e)[:60]}", "red")
 
 
-# ── Ventana ───────────────────────────────────────────────────────────────────
+# ── Ventana principal ─────────────────────────────────────────────────────────
 
 class OnboardingWizard(QMainWindow):
     def __init__(self):
@@ -219,7 +220,7 @@ class OnboardingWizard(QMainWindow):
             sl.addWidget(lbl)
 
         self._nav = []
-        for txt, idx in [("Inicio",0),("Términos",1),("Telegram",2),("Preferencias",3),("Listo",4)]:
+        for txt, idx in [("Inicio",0),("Términos",1),("Telegram",2),("Preferencias",3),("Calibración",4),("Listo",5)]:
             b = QPushButton(txt); b.setObjectName("nav"); b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _, i=idx: self._ir(i))
@@ -239,15 +240,21 @@ class OnboardingWizard(QMainWindow):
         self.stack = QStackedWidget(); scroll.setWidget(self.stack)
         cl.addWidget(scroll); ml.addWidget(content, stretch=1)
 
-        for pg in [self._pg_inicio(), self._pg_terminos(), self._pg_telegram(),
-                   self._pg_preferencias(), self._pg_completado()]:
-            self.stack.addWidget(pg)
+        # Crear páginas en orden
+        self.stack.addWidget(self._pg_inicio())        # 0
+        self.stack.addWidget(self._pg_terminos())      # 1
+        self.stack.addWidget(self._pg_telegram())      # 2
+        self.stack.addWidget(self._pg_preferencias())  # 3
+        self.stack.addWidget(self._pg_calibracion())   # 4 (NUEVO)
+        self.stack.addWidget(self._pg_completado())    # 5
         self._ir(0)
+
+        self._calib_widget = None  # referencia para liberar
 
     def _ir(self, idx):
         if idx >= 2 and not self.terminos_aceptados:
             QMessageBox.warning(self, "Requerido", "Acepta los términos primero."); return
-        if idx >= 4 and not self.chat_id_validado:
+        if idx >= 3 and not self.chat_id_validado:
             QMessageBox.warning(self, "Pendiente", "Completa la configuración de Telegram."); return
         self.stack.setCurrentIndex(idx)
         for i, b in enumerate(self._nav): b.setChecked(i == idx)
@@ -258,7 +265,6 @@ class OnboardingWizard(QMainWindow):
         w = QWidget(); lay = QVBoxLayout(w)
         lay.setSpacing(_s(14,self._f)); lay.setContentsMargins(0,0,0,0)
 
-        # Imagen principal: monitoreo-postura.jpg
         img = _pix("monitoreo-postura.jpg", _s(160,self._f), _s(100,self._f))
         if img:
             lbl = QLabel(); lbl.setPixmap(img); lbl.setAlignment(Qt.AlignCenter)
@@ -445,7 +451,7 @@ class OnboardingWizard(QMainWindow):
         row = QHBoxLayout()
         b_back = QPushButton("Atrás"); b_back.setObjectName("secondary")
         b_back.clicked.connect(lambda: self._ir(2))
-        b_next = QPushButton("Guardar y finalizar"); b_next.setObjectName("success")
+        b_next = QPushButton("Guardar y continuar"); b_next.setObjectName("success")
         b_next.clicked.connect(self._guardar_pref)
         row.addWidget(b_back); row.addStretch(); row.addWidget(b_next)
         lay.addLayout(row)
@@ -454,9 +460,68 @@ class OnboardingWizard(QMainWindow):
     def _guardar_pref(self):
         if self._chk_auto.isChecked(): activar_autoarranque()
         else: desactivar_autoarranque()
-        self._ir(4)
+        self._ir(4)   # Ir a calibración
 
-    # ── Página 4: Completado ──────────────────────────────────────────────────
+    # ── Página 4: Calibración (Opción C) ──────────────────────────────────────
+
+    def _pg_calibracion(self):
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setSpacing(_s(14, self._f))
+
+        tit = QLabel("Calibración de postura base")
+        tit.setStyleSheet(f"font-size:{max(9,int(22*self._f))}px;font-weight:bold;")
+        lay.addWidget(tit)
+
+        desc = QLabel(
+            "Para mejorar la precisión, podemos calibrar el sistema con tu postura correcta.\n\n"
+            "Siéntate recto, mira al frente y haz clic en 'Iniciar calibración'.\n"
+            "Mantén la posición durante 5 segundos mientras la cámara captura tus medidas.\n\n"
+            "Puedes saltar este paso y hacerlo más tarde con la tecla [C] o con --calibrar."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color:#6c6c70;font-size:{max(9,int(12*self._f))}px;")
+        lay.addWidget(desc)
+
+        self._btn_cal = QPushButton("Iniciar calibración ahora")
+        self._btn_cal.setObjectName("success")
+        self._btn_cal.clicked.connect(self._iniciar_calibracion_desde_wizard)
+        lay.addWidget(self._btn_cal, alignment=Qt.AlignCenter)
+
+        btn_saltar = QPushButton("Saltar (usar valores estándar)")
+        btn_saltar.setObjectName("secondary")
+        btn_saltar.clicked.connect(self._saltar_calibracion)
+        lay.addWidget(btn_saltar, alignment=Qt.AlignCenter)
+
+        lay.addStretch()
+        return w
+
+    def _iniciar_calibracion_desde_wizard(self):
+        from onboarding.calibracion_widget import CalibracionWidget
+        self._btn_cal.setEnabled(False)
+        self._calib_widget = CalibracionWidget(indice_camara=0, parent=self)
+        self._calib_widget.calibracion_completada.connect(self._calibracion_ok)
+        self._calib_widget.calibracion_cancelada.connect(self._saltar_calibracion)
+        self.stack.addWidget(self._calib_widget)
+        self.stack.setCurrentWidget(self._calib_widget)
+        self._calib_widget.activar()
+
+    def _calibracion_ok(self):
+        # Calibración exitosa
+        self.stack.removeWidget(self._calib_widget)
+        self._calib_widget = None
+        self._btn_cal.setEnabled(True)
+        QMessageBox.information(self, "Calibración", "Perfil corporal guardado correctamente.")
+        self._ir(5)  # ir a página Listo
+
+    def _saltar_calibracion(self):
+        if self._calib_widget:
+            self._calib_widget.desactivar()
+            self.stack.removeWidget(self._calib_widget)
+            self._calib_widget = None
+        self._btn_cal.setEnabled(True)
+        self._ir(5)
+
+    # ── Página 5: Completado ──────────────────────────────────────────────────
 
     def _pg_completado(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setSpacing(_s(14,self._f))
