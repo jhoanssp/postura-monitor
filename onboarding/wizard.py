@@ -1,12 +1,7 @@
 """
-Asistente de configuración inicial — v4.5
-- Imagen monitoreo-postura.jpg en bienvenida
-- Logo logo.png en sidebar
-- Sin selector de idioma
-- Ventana adaptativa
-- Autoarranque opcional
-- Botón desinstalar
-- NUEVO: Pantalla de calibración frontal opcional (Opción C)
+Asistente de configuración inicial — v4.5.1
+- Calibración frontal opcional con widget corregido
+- Resto igual que v4.5
 """
 
 import sys, os, re, subprocess, requests

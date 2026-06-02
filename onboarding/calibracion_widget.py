@@ -1,6 +1,7 @@
 """
-Widget de calibración de postura base — v4.4
-Se incrusta en el wizard como una pantalla adicional.
+Widget de calibración de postura base — v4.5.1 CORREGIDO
+Se incrusta en el wizard. Muestra la cámara en vivo y guía al usuario
+a mantener postura correcta durante 5 segundos.
 """
 
 import cv2
@@ -22,7 +23,7 @@ logger = crear_logger("calibracion_widget")
 class CalibracionWidget(QWidget):
     """
     Muestra la cámara en vivo, guía al usuario a sentarse correctamente
-    y captura su perfil corporal.
+    y captura su perfil corporal durante 5 segundos.
     """
 
     calibracion_completada = Signal()   # emitida al finalizar
@@ -41,12 +42,14 @@ class CalibracionWidget(QWidget):
         self._frames = 0
         self._total  = self.DURACION_SEG * 30   # ~30fps
         self._activo = False
+        self._calibrando = False
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        lay = QVBoxLayout(self); lay.setSpacing(16)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(16)
 
         # Título
         tit = QLabel("Calibración de Postura")
@@ -79,7 +82,8 @@ class CalibracionWidget(QWidget):
 
         # Progreso
         self._prog = QProgressBar()
-        self._prog.setRange(0, 100); self._prog.setValue(0)
+        self._prog.setRange(0, 100)
+        self._prog.setValue(0)
         self._prog.setTextVisible(True)
         self._prog.setStyleSheet(
             "QProgressBar{border-radius:6px;background:#2c2c2e;height:20px;}"
@@ -100,7 +104,9 @@ class CalibracionWidget(QWidget):
         self._btn_inicio = QPushButton("Iniciar calibración")
         self._btn_inicio.setObjectName("success")
         self._btn_inicio.clicked.connect(self._iniciar)
-        row.addWidget(self._btn_saltar); row.addStretch(); row.addWidget(self._btn_inicio)
+        row.addWidget(self._btn_saltar)
+        row.addStretch()
+        row.addWidget(self._btn_inicio)
         lay.addLayout(row)
 
     # ── Control ───────────────────────────────────────────────────────────────
@@ -112,21 +118,30 @@ class CalibracionWidget(QWidget):
             if self._cap.isOpened():
                 self._timer.start(33)   # ~30fps
                 self._activo = True
+                logger.info("Cámara activada para calibración.")
+            else:
+                self._lbl_cam.setText("No se pudo abrir la cámara")
         except Exception as e:
             logger.error(f"Cámara: {e}")
+            self._lbl_cam.setText("Error de cámara")
 
     def desactivar(self):
         self._timer.stop()
         self._activo = False
+        self._calibrando = False
         if self._cap:
             self._cap.release()
             self._cap = None
+        logger.info("Calibración desactivada.")
 
     def _iniciar(self):
-        if not self._activo: return
+        if not self._activo or self._cap is None:
+            self._lbl_estado.setText("Cámara no disponible")
+            return
         self._btn_inicio.setEnabled(False)
         self._btn_saltar.setEnabled(False)
         self._calibrador.iniciar()
+        self._calibrando = True
         self._frames = 0
         self._lbl_instr.setText(
             "✅ Mantén tu postura correcta durante 5 segundos...\n"
@@ -142,36 +157,45 @@ class CalibracionWidget(QWidget):
     # ── Tick ──────────────────────────────────────────────────────────────────
 
     def _tick(self):
-        if not self._cap or not self._cap.isOpened():
+        if not self._activo or self._cap is None:
             return
         ok, frame = self._cap.read()
-        if not ok: return
+        if not ok or frame is None:
+            return
 
         # Detectar pose
         resultado = self._detector.detectar(frame)
         if resultado.pose_detectada:
             self._detector.dibujar_esqueleto(frame, resultado.landmarks_raw)
 
-        # Si calibración activa — agregar frame
-        if self._calibrador._calibrando and resultado.landmarks:
-            progreso = self._calibrador.agregar_frame(resultado.landmarks)
-            pct = int(progreso * 100)
-            self._prog.setValue(pct)
-            segs_restantes = max(0, self.DURACION_SEG - int(progreso * self.DURACION_SEG))
-            self._lbl_estado.setText(f"Capturando... {segs_restantes}s")
+        # Si calibración activa y tenemos landmarks -> agregar frame
+        if self._calibrando:
+            if resultado.landmarks:
+                progreso = self._calibrador.agregar_frame(resultado.landmarks, vista="frontal")
+                pct = int(progreso * 100)
+                self._prog.setValue(pct)
+                segs_restantes = max(0, self.DURACION_SEG - int(progreso * self.DURACION_SEG))
+                self._lbl_estado.setText(f"Capturando... {segs_restantes}s restantes")
 
-            # Overlay de progreso en el frame
-            h, w = frame.shape[:2]
-            cv2.rectangle(frame, (0, h-8), (int(w*progreso), h), (52,199,89), -1)
+                # Overlay de progreso en el frame
+                h, w = frame.shape[:2]
+                cv2.rectangle(frame, (0, h-8), (int(w * progreso), h), (52,199,89), -1)
 
-            if progreso >= 1.0:
-                self._finalizar_calibracion(resultado.landmarks)
-                return
+                if progreso >= 1.0:
+                    self._finalizar_calibracion()
+                    return
+            else:
+                # No se detecta postura: mostrar advertencia
+                self._lbl_estado.setText("⚠️ No se detecta tu cuerpo. Siéntate derecho.")
+                self._lbl_estado.setStyleSheet("color:orange;")
+                h, w = frame.shape[:2]
+                cv2.putText(frame, "No se detecta postura", (w//2-100, h//2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
 
         # Mostrar frame en el widget
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = frame_rgb.shape
-        img = QImage(frame_rgb.data, w, h, ch*w, QImage.Format_RGB888)
+        img = QImage(frame_rgb.data, w, h, ch * w, QImage.Format_RGB888)
         self._lbl_cam.setPixmap(
             QPixmap.fromImage(img).scaled(
                 self._lbl_cam.width(), self._lbl_cam.height(),
@@ -179,9 +203,9 @@ class CalibracionWidget(QWidget):
             )
         )
 
-    def _finalizar_calibracion(self, landmarks):
-        vista = "frontal"  # por defecto desde webcam frontal
-        perfil = self._calibrador.finalizar(vista)
+    def _finalizar_calibracion(self):
+        perfil = self._calibrador.finalizar("frontal")
+        self._calibrando = False
         self._timer.stop()
 
         if perfil:
@@ -194,6 +218,7 @@ class CalibracionWidget(QWidget):
                 f"Cuello base: {perfil.neck_base_deg:.1f}° | "
                 f"Factor distancia: {perfil.factor_distancia:.2f}"
             )
+            # Pequeña pausa antes de cerrar
             from PySide6.QtCore import QTimer as QT
             QT.singleShot(1500, lambda: (self.desactivar(), self.calibracion_completada.emit()))
         else:
@@ -201,3 +226,4 @@ class CalibracionWidget(QWidget):
             self._lbl_estado.setStyleSheet("color:orange;")
             self._btn_inicio.setEnabled(True)
             self._btn_saltar.setEnabled(True)
+            self._calibrando = False
