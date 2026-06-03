@@ -1,7 +1,8 @@
 """
-Asistente de configuración inicial — v4.5.4 CORREGIDO
-- Detección automática de cámara para calibración
-- Mejor manejo de errores
+Asistente de configuración inicial — v4.5.5
+- Calibración opcional con detección automática de cámara
+- Feedback visual durante la captura
+- Integración completa con el widget de calibración
 """
 
 import sys, os, re, subprocess, requests
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils.logger import crear_logger
 from onboarding.estado import OnboardingEstado
 from config.credentials import get_telegram_bot_token, get_bot_username
+from core.captura_video import detectar_camaras_disponibles   # <-- NUEVA IMPORTACIÓN
 
 logger = crear_logger("onboarding_wizard")
 
@@ -127,7 +129,7 @@ class EnviadorPrueba(QThread):
             self.resultado.emit(f"Error: {str(e)[:60]}", "red")
 
 
-# ── Ventana ───────────────────────────────────────────────────────────────────
+# ── Ventana principal del wizard ──────────────────────────────────────────────
 
 class OnboardingWizard(QMainWindow):
     # Páginas: 0=Inicio 1=Términos 2=Telegram 3=Preferencias 4=Calibración 5=Listo
@@ -233,8 +235,7 @@ class OnboardingWizard(QMainWindow):
             QMessageBox.warning(self,"Pendiente","Completa la configuración de Telegram."); return
         # Activar/desactivar widget de calibración
         if idx == 4:
-            if hasattr(self, '_cal_widget'):
-                self._cal_widget.activar()
+            self._cal_widget.activar()
         else:
             if hasattr(self, '_cal_widget'):
                 self._cal_widget.desactivar()
@@ -412,7 +413,6 @@ class OnboardingWizard(QMainWindow):
         self._ir(4)
 
     # ── Página 4: Calibración (OPCIONAL) ─────────────────────────────────────
-    # CORREGIDO: detección automática de cámara, mejor manejo
 
     def _pg_calibracion(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(_s(14,self._f))
@@ -435,7 +435,6 @@ class OnboardingWizard(QMainWindow):
 
         # Detectar cámara disponible automáticamente
         try:
-            from core.captura_video import detectar_camaras_disponibles
             camaras = detectar_camaras_disponibles()
             idx_cam = camaras[0] if camaras else 0
             logger.info(f"Cámara seleccionada para calibración: {idx_cam}")
