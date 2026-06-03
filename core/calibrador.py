@@ -1,7 +1,7 @@
 """
-Calibrador de postura base — v4.4
-Captura la postura correcta del usuario y calcula factores de escala
-personalizados para distancia y tamaño corporal.
+Calibrador de postura base — v4.5.4 CORREGIDO
+- Reduce FRAMES_REQUERIDOS a 45 para una calibración más rápida
+- Añade logs de depuración opcionales
 """
 
 import json
@@ -50,7 +50,7 @@ class UmbralesPersonalizados:
 
     # Posturas 5-7 (frontal/lateral)
     tronco_vertical_alerta: float = 20.0
-    inclinacion_lateral_tronco: float = 20.0  # aumentado para reducir FP
+    inclinacion_lateral_tronco: float = 20.0
     inclinacion_lateral_cuello: float = 15.0
 
     # Posturas 8-9 (frontal)
@@ -69,7 +69,7 @@ class Calibrador:
     con umbrales relativos personalizados.
     """
 
-    FRAMES_REQUERIDOS = 90   # ~3 segundos a 30 FPS
+    FRAMES_REQUERIDOS = 45   # ~1.5 segundos a 30 FPS (antes 90)
     ARCHIVO_PERFIL = "perfil_corporal.json"
 
     def __init__(self):
@@ -98,6 +98,8 @@ class Calibrador:
         datos = self._extraer_medidas(landmarks, vista)
         if datos:
             self._frames_buffer.append(datos)
+            # Log opcional para depuración
+            logger.debug(f"Frame añadido. Total: {len(self._frames_buffer)}/{self.FRAMES_REQUERIDOS}")
 
         return min(len(self._frames_buffer) / self.FRAMES_REQUERIDOS, 1.0)
 
@@ -105,12 +107,12 @@ class Calibrador:
         """Procesa el buffer y genera el perfil corporal."""
         self._calibrando = False
         if len(self._frames_buffer) < 30:
-            logger.warning("Pocos frames para calibrar.")
+            logger.warning(f"Pocos frames para calibrar: {len(self._frames_buffer)} (mínimo 30).")
             return None
 
         perfil = self._calcular_perfil(vista)
         self._guardar(perfil)
-        logger.info(f"Calibración completada. Frames: {perfil.frames_usados}")
+        logger.info(f"Calibración completada. Frames usados: {perfil.frames_usados}")
         return perfil
 
     # ── Extracción de medidas por frame ──────────────────────────────────────
@@ -150,9 +152,8 @@ class Calibrador:
             dist_oido_hombro   = float(np.linalg.norm(oido_medio - hombro_medio))
 
             # Ángulo de encorvamiento (postura 1)
-            # Ángulo EN el hombro: vectors desde hombro→cadera y hombro→oído
-            vec1 = cadera_medio - hombro_medio  # apunta hacia abajo
-            vec2 = oido_medio - hombro_medio    # apunta hacia arriba
+            vec1 = cadera_medio - hombro_medio
+            vec2 = oido_medio - hombro_medio
             cos_ang = np.dot(vec1, vec2) / (
                 np.linalg.norm(vec1) * np.linalg.norm(vec2) + 1e-6
             )
@@ -170,19 +171,17 @@ class Calibrador:
             torso_deg = float(np.degrees(np.arccos(np.clip(cos_t, -1, 1))))
 
             # Inclinación lateral (postura 6)
-            # CORRECCIÓN: h_izq (LM11) aparece a la DERECHA en imagen
-            # Usar (h_izq - h_der) para obtener ~0° cuando nivelado
             inc_lat = abs(float(np.degrees(np.arctan2(
                 h_izq[1] - h_der[1], h_izq[0] - h_der[0]
             ))))
 
             # Ratio encorvamiento frontal
             nariz = self._xy(lm, 0)
+            shoulder_w = ancho_hombros
+            enc_frontal_ratio = 0.90
             if nariz is not None and shoulder_w > 0.01:
-                hombro_y_med = float((hombro_izq[1] + hombro_der[1]) / 2)
+                hombro_y_med = float((h_izq[1] + h_der[1]) / 2)
                 enc_frontal_ratio = float((hombro_y_med - nariz[1]) / shoulder_w)
-            else:
-                enc_frontal_ratio = 0.90
 
             return {
                 "altura_torso": altura_torso,
@@ -250,7 +249,6 @@ class Calibrador:
         f = np.clip(perfil.factor_distancia, 0.5, 2.0)
 
         # Postura 1: encorvamiento — umbral relativo a su ángulo base
-        # Con la fórmula corregida, base ~170°. Alerta a 15° menos que su base.
         u.encorvamiento_alerta = max(145.0, perfil.encorvamiento_base_deg - 15.0)
 
         # Postura 2: flexión cervical — margen de 15° sobre su base

@@ -1,6 +1,7 @@
 """
-Asistente de configuración inicial — v4.5.1
-Opción C de calibración: pantalla opcional en onboarding + [C] en debug.
+Asistente de configuración inicial — v4.5.4 CORREGIDO
+- Detección automática de cámara para calibración
+- Mejor manejo de errores
 """
 
 import sys, os, re, subprocess, requests
@@ -232,7 +233,8 @@ class OnboardingWizard(QMainWindow):
             QMessageBox.warning(self,"Pendiente","Completa la configuración de Telegram."); return
         # Activar/desactivar widget de calibración
         if idx == 4:
-            self._cal_widget.activar()
+            if hasattr(self, '_cal_widget'):
+                self._cal_widget.activar()
         else:
             if hasattr(self, '_cal_widget'):
                 self._cal_widget.desactivar()
@@ -410,6 +412,7 @@ class OnboardingWizard(QMainWindow):
         self._ir(4)
 
     # ── Página 4: Calibración (OPCIONAL) ─────────────────────────────────────
+    # CORREGIDO: detección automática de cámara, mejor manejo
 
     def _pg_calibracion(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(_s(14,self._f))
@@ -430,10 +433,20 @@ class OnboardingWizard(QMainWindow):
         )
         lay.addWidget(desc)
 
+        # Detectar cámara disponible automáticamente
+        try:
+            from core.captura_video import detectar_camaras_disponibles
+            camaras = detectar_camaras_disponibles()
+            idx_cam = camaras[0] if camaras else 0
+            logger.info(f"Cámara seleccionada para calibración: {idx_cam}")
+        except Exception as e:
+            idx_cam = 0
+            logger.warning(f"Error detectando cámaras: {e}")
+
         # Widget de calibración embebido
         try:
             from onboarding.calibracion_widget import CalibracionWidget
-            self._cal_widget = CalibracionWidget(indice_camara=0)
+            self._cal_widget = CalibracionWidget(indice_camara=idx_cam)
             self._cal_widget.calibracion_completada.connect(lambda: self._ir(5))
             self._cal_widget.calibracion_cancelada.connect(lambda: self._ir(5))
             lay.addWidget(self._cal_widget)

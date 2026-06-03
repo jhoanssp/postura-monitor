@@ -1,7 +1,9 @@
 """
-Widget de calibración de postura base — v4.5.1 CORREGIDO
-Se incrusta en el wizard. Muestra la cámara en vivo y guía al usuario
-a mantener postura correcta durante 5 segundos.
+Widget de calibración de postura base — v4.5.4 CORREGIDO
+- Mejor feedback visual cuando no detecta cuerpo
+- Muestra el esqueleto en tiempo real
+- Timeout y mensajes de ayuda
+- Usa la misma cámara que el monitor principal
 """
 
 import cv2
@@ -30,12 +32,13 @@ class CalibracionWidget(QWidget):
     calibracion_cancelada  = Signal()   # emitida al saltar
 
     DURACION_SEG = 5
+    TIMEOUT_SIN_DETECCION = 10  # segundos sin detectar cuerpo -> mensaje de ayuda
 
     def __init__(self, indice_camara: int = 0, parent=None):
         super().__init__(parent)
         self._idx    = indice_camara
         self._cap    = None
-        self._detector  = DetectorPostura()
+        self._detector  = DetectorPostura(confianza_deteccion=0.6, confianza_seguimiento=0.6, umbral_visibilidad=0.4)
         self._calibrador = Calibrador()
         self._timer  = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -43,6 +46,7 @@ class CalibracionWidget(QWidget):
         self._total  = self.DURACION_SEG * 30   # ~30fps
         self._activo = False
         self._calibrando = False
+        self._inicio_sin_deteccion = None
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -113,14 +117,21 @@ class CalibracionWidget(QWidget):
 
     def activar(self):
         """Inicia la cámara para previsualización."""
+        if self._activo:
+            return
         try:
             self._cap = cv2.VideoCapture(self._idx)
             if self._cap.isOpened():
+                # Configurar resolución
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                 self._timer.start(33)   # ~30fps
                 self._activo = True
-                logger.info("Cámara activada para calibración.")
+                logger.info(f"Cámara {self._idx} activada para calibración.")
+                self._lbl_cam.setText("Cámara lista")
             else:
-                self._lbl_cam.setText("No se pudo abrir la cámara")
+                self._lbl_cam.setText(f"No se pudo abrir la cámara {self._idx}")
+                logger.error(f"No se pudo abrir cámara {self._idx}")
         except Exception as e:
             logger.error(f"Cámara: {e}")
             self._lbl_cam.setText("Error de cámara")
@@ -143,12 +154,14 @@ class CalibracionWidget(QWidget):
         self._calibrador.iniciar()
         self._calibrando = True
         self._frames = 0
+        self._inicio_sin_deteccion = None
         self._lbl_instr.setText(
             "✅ Mantén tu postura correcta durante 5 segundos...\n"
             "Espalda recta, mira al frente."
         )
         self._lbl_estado.setText("Capturando...")
         self._lbl_estado.setStyleSheet("color:#34c759;font-size:13px;font-weight:500;")
+        self._prog.setValue(0)
 
     def _saltar(self):
         self.desactivar()
@@ -161,12 +174,29 @@ class CalibracionWidget(QWidget):
             return
         ok, frame = self._cap.read()
         if not ok or frame is None:
+            # Mostrar mensaje de error de cámara
+            self._lbl_cam.setText("Error leyendo cámara")
             return
+
+        # Espejo para que el usuario se vea natural
+        frame = cv2.flip(frame, 1)
 
         # Detectar pose
         resultado = self._detector.detectar(frame)
         if resultado.pose_detectada:
             self._detector.dibujar_esqueleto(frame, resultado.landmarks_raw)
+            # Reset contador sin detección
+            self._inicio_sin_deteccion = None
+        else:
+            # Marcar tiempo sin detección
+            if self._inicio_sin_deteccion is None:
+                self._inicio_sin_deteccion = cv2.getTickCount() / cv2.getTickFrequency()
+            elapsed = (cv2.getTickCount() / cv2.getTickFrequency()) - self._inicio_sin_deteccion
+            cv2.putText(frame, "Cuerpo no detectado", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+            if elapsed > self.TIMEOUT_SIN_DETECCION and not self._calibrando:
+                self._lbl_estado.setText("⚠️ No se detecta tu cuerpo. Asegúrate de estar frente a la cámara.")
+                self._lbl_estado.setStyleSheet("color:orange;")
 
         # Si calibración activa y tenemos landmarks -> agregar frame
         if self._calibrando:
@@ -185,9 +215,10 @@ class CalibracionWidget(QWidget):
                     self._finalizar_calibracion()
                     return
             else:
-                # No se detecta postura: mostrar advertencia
+                # No se detectan landmarks: mostrar advertencia en la UI
                 self._lbl_estado.setText("⚠️ No se detecta tu cuerpo. Siéntate derecho.")
                 self._lbl_estado.setStyleSheet("color:orange;")
+                # También dibujar texto en el frame
                 h, w = frame.shape[:2]
                 cv2.putText(frame, "No se detecta postura", (w//2-100, h//2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
@@ -206,7 +237,7 @@ class CalibracionWidget(QWidget):
     def _finalizar_calibracion(self):
         perfil = self._calibrador.finalizar("frontal")
         self._calibrando = False
-        self._timer.stop()
+        self._timer.stop()  # Detener temporalmente para mostrar mensaje
 
         if perfil:
             self._prog.setValue(100)
@@ -227,3 +258,5 @@ class CalibracionWidget(QWidget):
             self._btn_inicio.setEnabled(True)
             self._btn_saltar.setEnabled(True)
             self._calibrando = False
+            # Reactivar timer para seguir mostrando cámara
+            self._timer.start(33)
