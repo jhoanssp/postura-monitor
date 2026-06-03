@@ -202,9 +202,9 @@ class SupabaseClient:
                 posturas = response_posturas.json()
                 if posturas:
                     total = len(posturas)
-                    correctos = sum(1 for p in posturas if p.get("estado") == "correcta")
+                    correctos = sum(1 for p in posturas if p.get("estado") == "correcto")
                     advertencias = sum(1 for p in posturas if p.get("estado") == "advertencia")
-                    incorrectos = sum(1 for p in posturas if p.get("estado") == "incorrecta")
+                    incorrectos = sum(1 for p in posturas if p.get("estado") == "incorrecto")
                     angulos_cuello = [p.get("angulo_cuello", 0) for p in posturas if p.get("angulo_cuello")]
                     angulos_espalda = [p.get("angulo_espalda", 0) for p in posturas if p.get("angulo_espalda")]
                     promedio_cuello = sum(angulos_cuello) / len(angulos_cuello) if angulos_cuello else 0
