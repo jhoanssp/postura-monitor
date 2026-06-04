@@ -17,6 +17,20 @@ import os
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 # Alternativa complementaria para entornos XCB:
 os.environ.setdefault("QT_QPA_PLATFORM", os.environ.get("QT_QPA_PLATFORM", "xcb"))
+
+# ── FIX WINDOWS: forzar ruta de plugins de Qt (necesario para ejecutable) ──
+if sys.platform == "win32" and getattr(sys, 'frozen', False):
+    base = getattr(sys, '_MEIPASS', None)
+    if base:
+        # Ruta esperada dentro del empaquetado de PyInstaller
+        plugin_path = os.path.join(base, 'PySide6', 'Qt', 'plugins')
+        if os.path.isdir(plugin_path):
+            os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
+        else:
+            # Fallback (estructura alternativa)
+            alt = os.path.join(base, 'PySide6', 'plugins')
+            if os.path.isdir(alt):
+                os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = alt
 # ─────────────────────────────────────────────────────────────────────────────
 
 import argparse

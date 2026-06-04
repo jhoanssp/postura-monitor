@@ -7,13 +7,12 @@ block_cipher = None
 APP_ROOT = Path(SPECPATH).parent
 
 # ========== DATOS Y BINARIOS ADICIONALES ==========
-# MediaPipe
 mediapipe_datas = collect_data_files("mediapipe")
-mediapipe_bins = collect_dynamic_libs("mediapipe")
+mediapipe_bins  = collect_dynamic_libs("mediapipe")
 
-# PySide6 (lo que faltaba: plugins, translations, etc.)
-pyside6_datas = collect_data_files("PySide6", include_py_files=False)   # recursos estáticos
-pyside6_bins  = collect_dynamic_libs("PySide6")                         # DLLs internos
+# PySide6 - lo que faltaba (plugins, translations, etc.)
+pyside6_datas = collect_data_files("PySide6", include_py_files=False)
+pyside6_bins  = collect_dynamic_libs("PySide6")
 
 # Carpeta de imágenes del onboarding
 img_dir = str(APP_ROOT / "onboarding" / "img")
@@ -23,20 +22,17 @@ onboarding_datas = [(img_dir, "onboarding/img")]
 all_datas = mediapipe_datas + pyside6_datas + onboarding_datas
 all_binaries = mediapipe_bins + pyside6_bins
 
-# ========== RUNTIME HOOK (fija QT_QPA_PLATFORM_PLUGIN_PATH) ==========
-# Crear el archivo hook temporal en la carpeta packaging/hooks
+# ========== RUNTIME HOOK PARA WINDOWS ==========
+# Se crea el archivo automáticamente en packaging/hooks/
 hook_path = Path(SPECPATH) / "hooks" / "qt_fix_runtime.py"
 hook_path.parent.mkdir(parents=True, exist_ok=True)
 hook_content = '''import os, sys
 if sys.platform == "win32" and getattr(sys, 'frozen', False):
-    # PyInstaller extrae los archivos en sys._MEIPASS
     base = sys._MEIPASS
-    # La ruta esperada de los plugins de Qt dentro del paquete
     plugin_path = os.path.join(base, 'PySide6', 'Qt', 'plugins')
     if os.path.isdir(plugin_path):
         os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
     else:
-        # fallback (estructura alternativa)
         alt = os.path.join(base, 'PySide6', 'plugins')
         if os.path.isdir(alt):
             os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = alt
@@ -64,10 +60,7 @@ a = Analysis(
         "requests", "urllib3",
         # Supabase
         "supabase", "postgrest", "httpx",
-        # Notificaciones
-        "plyer", "plyer.platforms.linux.notification",
-        "plyer.platforms.win.notification",
-        # Módulos propios
+        # Propios
         "config.credentials",
         "config.settings",
         "config.i18n",
@@ -104,7 +97,7 @@ exe = EXE(
     exclude_binaries=True,
     name="postura-monitor",
     debug=False, strip=False, upx=True,
-    console=False,
+    console=False,   # ← sin consola, como ventana normal
 )
 
 coll = COLLECT(
