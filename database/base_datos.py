@@ -1,6 +1,5 @@
 """
 Adaptador de base de datos — Supabase backend.
-
 CAMBIOS v4.1 (Punto 4):
 ✓ obtener_resumen_sesion() calcula y GUARDA en DB:
   - porcentaje_buena_postura
