@@ -1,14 +1,12 @@
 @echo off
 REM =============================================================================
 REM build_windows.bat — Monitor de Postura v4 — Build Windows
-REM Ejecutar desde la RAIZ del proyecto (doble clic o cmd como administrador)
-REM Requiere: Python 3.10 o 3.11 (desde python.org)
-REM Opcional: Inno Setup 6 para generar instalador .exe
+REM CAMBIO: incluye entrenamiento RF y copia models\ al ejecutable
 REM =============================================================================
 setlocal enabledelayedexpansion
 
 set APP_NAME=postura-monitor
-set APP_VERSION=4.0.0
+set APP_VERSION=4.5.1
 set PROJECT_ROOT=%~dp0..
 
 echo ============================================================
@@ -19,7 +17,7 @@ cd /d "%PROJECT_ROOT%"
 
 REM ── Verificar Python compatible ──────────────────────────────────────────────
 echo.
-echo [0/4] Verificando Python...
+echo [0/5] Verificando Python...
 set PYTHON_CMD=
 for %%v in (python3.11 python3.10 python) do (
     where %%v >nul 2>&1
@@ -31,8 +29,6 @@ for %%v in (python3.11 python3.10 python) do (
 )
 if "!PYTHON_CMD!"=="" (
     echo ERROR: No se encontro Python 3.10 o 3.11.
-    echo Descarga desde: https://www.python.org/downloads/
-    echo IMPORTANTE: Marca "Add Python to PATH" al instalar.
     pause
     exit /b 1
 )
@@ -40,7 +36,7 @@ echo     Usando: !PYTHON_CMD! (!PYVER!)
 
 REM ── 1. Entorno virtual ───────────────────────────────────────────────────────
 echo.
-echo [1/4] Preparando entorno virtual...
+echo [1/5] Preparando entorno virtual...
 if exist "venv\" rmdir /s /q "venv\"
 !PYTHON_CMD! -m venv venv
 call venv\Scripts\activate.bat
@@ -50,23 +46,48 @@ pip install -r requirements.txt --quiet
 pip install pyinstaller --quiet
 echo     Dependencias instaladas.
 
-REM ── 2. PyInstaller ───────────────────────────────────────────────────────────
+REM ── 2. Entrenar modelos RF ────────────────────────────────────────────────────
 echo.
-echo [2/4] Compilando con PyInstaller...
+echo [2/5] Entrenando modelos Random Forest...
+if not exist "models\rf_upperbody.pkl" (
+    if exist "data.csv" (
+        python entrenamiento_rf.py --csv data.csv --no-cv
+        echo     Modelos RF generados.
+        dir models\*.pkl
+    ) else (
+        echo     ADVERTENCIA: data.csv no encontrado.
+        echo     El clasificador RF no estara disponible en esta build.
+        echo     El programa funcionara con el sistema heuristico de angulos.
+    )
+) else (
+    echo     Modelos RF ya existen, reutilizando.
+    dir models\*.pkl
+)
+
+REM ── 3. PyInstaller ───────────────────────────────────────────────────────────
+echo.
+echo [3/5] Compilando con PyInstaller...
 if exist "dist\" rmdir /s /q "dist\"
 if exist "build\" rmdir /s /q "build\"
 
 pyinstaller packaging\postura_monitor.spec --noconfirm --clean
 if errorlevel 1 (
-    echo ERROR: PyInstaller fallo. Revisa los mensajes anteriores.
+    echo ERROR: PyInstaller fallo.
     pause
     exit /b 1
 )
+
+REM ── NUEVO: Copiar models\ al ejecutable compilado ─────────────────────────────
+if exist "models\" (
+    echo     Copiando modelos RF al ejecutable...
+    xcopy /E /I /Q "models\" "dist\postura-monitor\_internal\models\"
+    echo     Modelos copiados.
+)
 echo     Compilacion exitosa.
 
-REM ── 3. Comprimir distribucion ────────────────────────────────────────────────
+REM ── 4. Comprimir distribucion ────────────────────────────────────────────────
 echo.
-echo [3/4] Preparando distribucion...
+echo [4/5] Preparando distribucion...
 if not exist "build_output\" mkdir build_output
 
 powershell -Command ^
@@ -75,9 +96,9 @@ powershell -Command ^
    -Force"
 echo     ZIP creado: build_output\postura-monitor_%APP_VERSION%_windows.zip
 
-REM ── 4. Inno Setup (genera instalador .exe con un clic) ───────────────────────
+REM ── 5. Inno Setup ────────────────────────────────────────────────────────────
 echo.
-echo [4/4] Buscando Inno Setup...
+echo [5/5] Buscando Inno Setup...
 set INNO=
 for %%p in (
     "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
@@ -93,9 +114,7 @@ if defined INNO (
         echo     Instalador .exe creado en build_output\
     )
 ) else (
-    echo     Inno Setup no encontrado ^(opcional^).
-    echo     Descarga desde: https://jrsoftware.org/isinfo.php
-    echo     Sin el, usa el ZIP generado para distribuir.
+    echo     Inno Setup no encontrado (opcional).
 )
 
 call venv\Scripts\deactivate.bat
@@ -104,9 +123,5 @@ echo.
 echo ============================================================
 echo   BUILD COMPLETADO
 echo   Archivos en: build_output\
-echo.
-echo   Distribucion:
-echo     ZIP:       build_output\postura-monitor_%APP_VERSION%_windows.zip
-echo     Instalador: build_output\postura-monitor_%APP_VERSION%_setup.exe
 echo ============================================================
 pause

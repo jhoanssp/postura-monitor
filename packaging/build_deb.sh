@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
 # build_deb.sh — Construye el paquete .deb de Monitor de Postura v4
-# Ejecutar desde la RAÍZ del proyecto: ./packaging/build_deb.sh
-# Probado en: Ubuntu 22.04, Bodhi Linux 7 (jammy)
+# CAMBIO: incluye la carpeta models/ con los .pkl del RF
 # =============================================================================
 set -euo pipefail
 
 APP_NAME="postura-monitor"
-APP_VERSION="4.5.0"
+APP_VERSION="4.5.1"
 ARCH="amd64"
 MAINTAINER="Tu Nombre <tu@email.com>"
 DESCRIPTION="Monitor de postura en tiempo real con IA, Telegram y Supabase"
@@ -23,7 +22,6 @@ echo "  Monitor de Postura v4 — Build .deb"
 echo "============================================================"
 echo "Proyecto: $PROJECT_ROOT"
 
-# ── Detectar versión de Python compatible (3.10 o 3.11, NO 3.12) ─────────────
 detect_python() {
     for cmd in python3.10 python3.11 python3; do
         if command -v "$cmd" &>/dev/null; then
@@ -38,30 +36,42 @@ detect_python() {
 
 PYTHON=$(detect_python)
 if [ -z "$PYTHON" ]; then
-    echo ""
     echo "ERROR: No se encontró Python 3.10 o 3.11."
-    echo "Instala con: sudo apt-get install python3.10 python3.10-venv"
     exit 1
 fi
 echo "Usando: $PYTHON ($($PYTHON --version))"
 
 # ── 1. Entorno virtual ────────────────────────────────────────────────────────
 echo ""
-echo ">>> [1/5] Preparando entorno virtual..."
+echo ">>> [1/6] Preparando entorno virtual..."
 cd "$PROJECT_ROOT"
-
 rm -rf venv/
 "$PYTHON" -m venv venv
 source venv/bin/activate
-
 pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
 pip install pyinstaller --quiet
 echo "    Dependencias instaladas."
 
-# ── 2. PyInstaller ────────────────────────────────────────────────────────────
+# ── 2. Entrenar modelos RF (si no existen ya) ─────────────────────────────────
 echo ""
-echo ">>> [2/5] Compilando con PyInstaller..."
+echo ">>> [2/6] Entrenando modelos Random Forest..."
+if [ ! -f "$PROJECT_ROOT/models/rf_upperbody.pkl" ]; then
+    if [ -f "$PROJECT_ROOT/data.csv" ]; then
+        python3 "$PROJECT_ROOT/entrenamiento_rf.py" --csv "$PROJECT_ROOT/data.csv" --no-cv
+        echo "    Modelos RF generados."
+    else
+        echo "    ADVERTENCIA: data.csv no encontrado. El clasificador RF no estará disponible."
+        echo "    El programa funcionará con el sistema heurístico de ángulos solamente."
+    fi
+else
+    echo "    Modelos RF ya existen, reutilizando."
+    ls -lh "$PROJECT_ROOT/models/"*.pkl
+fi
+
+# ── 3. PyInstaller ────────────────────────────────────────────────────────────
+echo ""
+echo ">>> [3/6] Compilando con PyInstaller..."
 rm -rf dist/ build/
 pyinstaller packaging/postura_monitor.spec --noconfirm --clean
 
@@ -69,12 +79,20 @@ if [ ! -d "$DIST_DIR" ]; then
     echo "ERROR: PyInstaller no generó '$DIST_DIR'"
     exit 1
 fi
+
+# ── NUEVO: Copiar models/ al directorio compilado ─────────────────────────────
+if [ -d "$PROJECT_ROOT/models" ] && ls "$PROJECT_ROOT/models"/*.pkl &>/dev/null 2>&1; then
+    echo "    Copiando modelos RF al ejecutable..."
+    cp -r "$PROJECT_ROOT/models" "$DIST_DIR/_internal/models"
+    echo "    Modelos copiados: $(ls "$DIST_DIR/_internal/models"/*.pkl | wc -l) archivos"
+fi
+
 echo "    Compilación exitosa. Tamaño:"
 du -sh "$DIST_DIR"
 
-# ── 3. Estructura del paquete .deb ────────────────────────────────────────────
+# ── 4. Estructura del paquete .deb ────────────────────────────────────────────
 echo ""
-echo ">>> [3/5] Creando estructura del paquete..."
+echo ">>> [4/6] Creando estructura del paquete..."
 rm -rf "$DEB_STAGE"
 mkdir -p "$DEB_STAGE/DEBIAN"
 mkdir -p "$DEB_STAGE/opt/$APP_NAME"
@@ -84,7 +102,6 @@ mkdir -p "$DEB_STAGE/usr/share/doc/$APP_NAME"
 
 cp -r "$DIST_DIR/." "$DEB_STAGE/opt/$APP_NAME/"
 
-# Lanzador — fija rutas Qt para evitar conflicto cv2 vs PySide6
 cat > "$DEB_STAGE/usr/local/bin/$APP_NAME" << 'LAUNCHER'
 #!/bin/bash
 export QT_QPA_PLATFORM_PLUGIN_PATH=/opt/postura-monitor/_internal/PySide6/Qt/plugins/platforms
@@ -94,7 +111,6 @@ exec /opt/postura-monitor/postura-monitor "$@"
 LAUNCHER
 chmod +x "$DEB_STAGE/usr/local/bin/$APP_NAME"
 
-# Entrada de escritorio
 cat > "$DEB_STAGE/usr/share/applications/$APP_NAME.desktop" << 'DESKTOP'
 [Desktop Entry]
 Version=1.0
@@ -111,12 +127,10 @@ DESKTOP
 
 cp "$PROJECT_ROOT/README.md" "$DEB_STAGE/usr/share/doc/$APP_NAME/" 2>/dev/null || true
 
-# ── 4. Metadatos DEBIAN ───────────────────────────────────────────────────────
+# ── 5. Metadatos DEBIAN ───────────────────────────────────────────────────────
 echo ""
-echo ">>> [4/5] Generando metadatos DEBIAN..."
-
+echo ">>> [5/6] Generando metadatos DEBIAN..."
 INSTALLED_SIZE=$(du -sk "$DEB_STAGE/opt" | cut -f1)
-
 cat > "$DEB_STAGE/DEBIAN/control" << CTRL
 Package: $APP_NAME
 Version: $APP_VERSION
@@ -129,11 +143,9 @@ Section: utils
 Priority: optional
 Description: $DESCRIPTION
  Detecta en tiempo real si tu postura frente a la computadora
- es correcta usando inteligencia artificial (MediaPipe).
+ es correcta usando inteligencia artificial (MediaPipe + Random Forest).
  Envía alertas personalizadas por Telegram y registra
  estadísticas en Supabase (nube).
- .
- Solo requiere conectar tu cuenta de Telegram en el primer inicio.
 CTRL
 
 cat > "$DEB_STAGE/DEBIAN/postinst" << 'POSTINST'
@@ -146,8 +158,6 @@ if command -v update-desktop-database &>/dev/null; then
 fi
 echo ""
 echo "✅ Monitor de Postura instalado correctamente."
-echo "   Ejecuta 'postura-monitor' o búscalo en el menú de aplicaciones."
-echo "   En el primer inicio se abrirá el asistente de configuración."
 echo ""
 exit 0
 POSTINST
@@ -161,7 +171,6 @@ exit 0
 PRERM
 chmod 755 "$DEB_STAGE/DEBIAN/prerm"
 
-# Script postrm — limpia /opt si queda vacío
 cat > "$DEB_STAGE/DEBIAN/postrm" << 'POSTRM'
 #!/bin/bash
 set -e
@@ -170,9 +179,9 @@ exit 0
 POSTRM
 chmod 755 "$DEB_STAGE/DEBIAN/postrm"
 
-# ── 5. Empaquetar ─────────────────────────────────────────────────────────────
+# ── 6. Empaquetar ─────────────────────────────────────────────────────────────
 echo ""
-echo ">>> [5/5] Construyendo el .deb..."
+echo ">>> [6/6] Construyendo el .deb..."
 mkdir -p "$BUILD_DIR"
 dpkg-deb --build --root-owner-group "$DEB_STAGE" \
     "$BUILD_DIR/${APP_NAME}_${APP_VERSION}_${ARCH}.deb"
@@ -183,11 +192,4 @@ echo ""
 echo "============================================================"
 echo "  ✅  LISTO"
 echo "  Paquete: $BUILD_DIR/${APP_NAME}_${APP_VERSION}_${ARCH}.deb"
-echo ""
-echo "  Para instalar:"
-echo "    sudo dpkg -i $BUILD_DIR/${APP_NAME}_${APP_VERSION}_${ARCH}.deb"
-echo "    sudo apt-get install -f   # si faltan dependencias"
-echo ""
-echo "  Para desinstalar:"
-echo "    sudo dpkg -r $APP_NAME"
 echo "============================================================"

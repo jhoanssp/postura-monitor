@@ -1,6 +1,7 @@
 # =============================================================================
-# Copiar a: .github/workflows/build.yml
-# Se activa con: git tag v4.0.0 && git push --tags
+# .github/workflows/build.yml
+# Se activa con: git tag v4.5.1 && git push --tags
+# O manualmente desde la pestaña Actions → "Run workflow"
 # =============================================================================
 name: Build Packages
 
@@ -10,13 +11,18 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # BUILD LINUX (.deb)
+  # ──────────────────────────────────────────────────────────────────────────
   build-linux:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Instalar dependencias del sistema
         run: |
           sudo apt-get update -qq
@@ -24,32 +30,61 @@ jobs:
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
             libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
             libxkbcommon-x11-0 libxcb-cursor0 python3.10-venv
+
+      # ── Entrenar modelos RF antes de compilar ──────────────────────────────
+      - name: Entrenar modelos Random Forest
+        run: |
+          pip install scikit-learn joblib pandas --quiet
+          python3 entrenamiento_rf.py --csv data.csv --no-cv
+          echo "Modelos generados:"
+          ls -lh models/
+
       - name: Build .deb
         run: |
           chmod +x packaging/build_deb.sh
           ./packaging/build_deb.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: postura-monitor-linux-deb
           path: build_output/*.deb
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # BUILD WINDOWS (.exe)
+  # ──────────────────────────────────────────────────────────────────────────
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Instalar Inno Setup
         run: choco install innosetup --yes --no-progress
+
+      # ── Entrenar modelos RF antes de compilar ──────────────────────────────
+      - name: Entrenar modelos Random Forest
+        run: |
+          pip install scikit-learn joblib pandas --quiet
+          python entrenamiento_rf.py --csv data.csv --no-cv
+          echo "Modelos generados:"
+          dir models\
+        shell: cmd
+
       - name: Build Windows
         run: packaging\build_windows.bat
         shell: cmd
+
       - uses: actions/upload-artifact@v4
         with:
           name: postura-monitor-windows
           path: build_output/
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # RELEASE automático al hacer push de un tag
+  # ──────────────────────────────────────────────────────────────────────────
   release:
     needs: [build-linux, build-windows]
     runs-on: ubuntu-latest

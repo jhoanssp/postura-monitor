@@ -27,3 +27,26 @@ logs/
 
 # macOS
 .DS_Store
+
+# Modelos RF generados automáticamente
+models/*.pkl
+models/feature_cols.pkl
+
+# Entornos virtuales
+venv/
+.venv/
+
+# Build outputs
+dist/
+build/
+build_output/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Modelos RF (se generan en CI)
+models/*.pkl
+models/feature_cols.pkl
