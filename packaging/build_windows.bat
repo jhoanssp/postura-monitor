@@ -1,7 +1,6 @@
 @echo off
 REM =============================================================================
 REM build_windows.bat — Monitor de Postura v4 — Build Windows
-REM CAMBIO: incluye entrenamiento RF y copia models\ al ejecutable
 REM =============================================================================
 setlocal enabledelayedexpansion
 
@@ -12,24 +11,22 @@ set PROJECT_ROOT=%~dp0..
 echo ============================================================
 echo   Monitor de Postura v4 - Build Windows
 echo ============================================================
-echo Proyecto: %PROJECT_ROOT%
 cd /d "%PROJECT_ROOT%"
 
-REM ── Verificar Python compatible ──────────────────────────────────────────────
+REM ── Verificar Python ─────────────────────────────────────────────────────────
 echo.
 echo [0/5] Verificando Python...
 set PYTHON_CMD=
 for %%v in (python3.11 python3.10 python) do (
     where %%v >nul 2>&1
     if not errorlevel 1 (
-        for /f "tokens=*" %%i in ('%%v -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')"') do set PYVER=%%i
+        for /f "tokens=*" %%i in ('%%v -c "import sys; v=sys.version_info; print(str(v.major)+'.'+str(v.minor))"') do set PYVER=%%i
         if "!PYVER!"=="3.10" set PYTHON_CMD=%%v
         if "!PYVER!"=="3.11" set PYTHON_CMD=%%v
     )
 )
 if "!PYTHON_CMD!"=="" (
     echo ERROR: No se encontro Python 3.10 o 3.11.
-    pause
     exit /b 1
 )
 echo     Usando: !PYTHON_CMD! (!PYVER!)
@@ -41,7 +38,7 @@ if exist "venv\" rmdir /s /q "venv\"
 !PYTHON_CMD! -m venv venv
 call venv\Scripts\activate.bat
 
-pip install --upgrade pip --quiet
+python -m pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
 pip install pyinstaller --quiet
 echo     Dependencias instaladas.
@@ -53,15 +50,11 @@ if not exist "models\rf_upperbody.pkl" (
     if exist "data.csv" (
         python entrenamiento_rf.py --csv data.csv --no-cv
         echo     Modelos RF generados.
-        dir models\*.pkl
     ) else (
         echo     ADVERTENCIA: data.csv no encontrado.
-        echo     El clasificador RF no estara disponible en esta build.
-        echo     El programa funcionara con el sistema heuristico de angulos.
     )
 ) else (
     echo     Modelos RF ya existen, reutilizando.
-    dir models\*.pkl
 )
 
 REM ── 3. PyInstaller ───────────────────────────────────────────────────────────
@@ -73,14 +66,13 @@ if exist "build\" rmdir /s /q "build\"
 pyinstaller packaging\postura_monitor.spec --noconfirm --clean
 if errorlevel 1 (
     echo ERROR: PyInstaller fallo.
-    pause
     exit /b 1
 )
 
-REM ── NUEVO: Copiar models\ al ejecutable compilado ─────────────────────────────
+REM ── Copiar models al ejecutable (xcopy /Y evita la pregunta interactiva) ──────
 if exist "models\" (
     echo     Copiando modelos RF al ejecutable...
-    xcopy /E /I /Q "models\" "dist\postura-monitor\_internal\models\"
+    xcopy /E /I /Y /Q "models\" "dist\postura-monitor\_internal\models\"
     echo     Modelos copiados.
 )
 echo     Compilacion exitosa.
@@ -90,38 +82,36 @@ echo.
 echo [4/5] Preparando distribucion...
 if not exist "build_output\" mkdir build_output
 
-powershell -Command ^
-  "Compress-Archive -Path 'dist\postura-monitor\*' ^
-   -DestinationPath 'build_output\postura-monitor_%APP_VERSION%_windows.zip' ^
-   -Force"
-echo     ZIP creado: build_output\postura-monitor_%APP_VERSION%_windows.zip
+set ZIP_OUT=build_output\postura-monitor_%APP_VERSION%_windows.zip
+set ZIP_SRC=dist\postura-monitor\
+
+powershell -Command "Compress-Archive -Path '%ZIP_SRC%*' -DestinationPath '%ZIP_OUT%' -Force"
+if errorlevel 1 (
+    echo ERROR: No se pudo crear el ZIP.
+    exit /b 1
+)
+echo     ZIP creado: %ZIP_OUT%
 
 REM ── 5. Inno Setup ────────────────────────────────────────────────────────────
 echo.
 echo [5/5] Buscando Inno Setup...
-set INNO=
-for %%p in (
-    "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
-    "%ProgramFiles%\Inno Setup 6\ISCC.exe"
-) do (
-    if exist %%p set INNO=%%p
-)
+set "INNO="
+if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "INNO=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "INNO=%ProgramFiles%\Inno Setup 6\ISCC.exe"
 
 if defined INNO (
     echo     Inno Setup encontrado. Creando instalador .exe...
-    !INNO! packaging\instalador_windows.iss
+    "%INNO%" packaging\instalador_windows.iss
     if not errorlevel 1 (
         echo     Instalador .exe creado en build_output\
     )
 ) else (
-    echo     Inno Setup no encontrado (opcional).
+    echo     Inno Setup no encontrado, usando solo el ZIP.
 )
 
 call venv\Scripts\deactivate.bat
 
 echo.
 echo ============================================================
-echo   BUILD COMPLETADO
-echo   Archivos en: build_output\
+echo   BUILD COMPLETADO - Archivos en: build_output\
 echo ============================================================
-pause

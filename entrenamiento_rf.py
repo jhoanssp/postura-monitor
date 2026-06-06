@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 entrenamiento_rf.py — Entrena y guarda los modelos Random Forest
 ================================================================
@@ -135,7 +136,7 @@ def entrenar(csv_path: str, out_dir: str, n_estimators: int, hacer_cv: bool) -> 
         kb = f.stat().st_size / 1024
         print(f"       {f.name:<25} {kb:>8.1f} KB")
 
-    print("\n✓ Entrenamiento completo. Ejecuta main.py para usar el clasificador RF.")
+    print("\nOK Entrenamiento completo. Ejecuta main.py para usar el clasificador RF.")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
